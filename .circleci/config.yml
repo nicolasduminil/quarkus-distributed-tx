@@ -1,0 +1,26 @@
+version: 2.1
+
+jobs:
+  build-and-test:
+    # A machine executor is required: the integration tests use Testcontainers
+    # (Quarkus Dev Services) to start two PostgreSQL databases.
+    machine:
+      image: ubuntu-2404:current
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - quarkus-xa-m2-{{ checksum "pom.xml" }}
+            - quarkus-xa-m2-
+      - run:
+          name: Build and run the XA integration tests
+          command: mvn -B verify
+      - save_cache:
+          key: quarkus-xa-m2-{{ checksum "pom.xml" }}
+          paths:
+            - ~/.m2
+
+workflows:
+  build:
+    jobs:
+      - build-and-test

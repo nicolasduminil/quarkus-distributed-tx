@@ -49,7 +49,7 @@ public class TransferResponse
     this.timestamp = timestamp;
   }
 
-  public static TransferResponse fromTransfer(Transfer transfer)
+  public static TransferResponse fromTransfer(TransferDto transfer)
   {
     TransferResponse response = new TransferResponse();
     response.setTransferId(transfer.getTransferId());

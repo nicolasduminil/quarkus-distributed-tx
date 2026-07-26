@@ -1,10 +1,10 @@
 package fr.simplex_software.quarkus_xa.money_xfr.account.service;
 
-import fr.simplex_software.quarkus_xa.money_xfr.account.domain.*;
-import fr.simplex_software.quarkus_xa.money_xfr.account.exception.*;
-import fr.simplex_software.quarkus_xa.money_xfr.account.repository.*;
+import fr.simplex_software.quarkus_xa.money_xfr.account_repository.*;
+import fr.simplex_software.quarkus_xa.money_xfr.common.exception.*;
 import jakarta.enterprise.context.*;
 import jakarta.inject.*;
+import jakarta.transaction.*;
 
 import java.math.*;
 import java.util.*;
@@ -15,62 +15,56 @@ public class AccountService
   @Inject
   AccountRepository accountRepository;
 
-  public Account getAccount(String accountId)
+  public AccountDto getAccount(String accountId)
   {
-    return accountRepository.getAccount(accountId);
+    return accountRepository.getAccount(accountId)
+      .orElseThrow(() -> new AccountNotFoundException(accountId))
+      .toDto();
   }
 
-  public void createAccount(Account account)
+  public List<AccountDto> getAccounts()
   {
-    accountRepository.createAccount(account);
+    return accountRepository.getAccounts().stream().map(Account::toDto).toList();
   }
 
-  public void updateAccount(Account account)
+  @Transactional
+  public void createAccount(AccountDto accountDto)
   {
-    accountRepository.updateAccount(account);
+    accountRepository.createAccount(new Account(accountDto));
   }
 
-  public void updateAccount(String accountId)
+  @Transactional
+  public void updateAccount(String accountId, AccountDto accountDto)
   {
-    accountRepository.updateAccount(accountRepository.getAccount(accountId));
+    accountRepository.getAccount(accountId)
+      .orElseThrow(() -> new AccountNotFoundException(accountId));
+    accountDto.setAccountId(accountId);
+    accountRepository.updateAccount(new Account(accountDto));
   }
 
-
+  @Transactional
   public void deleteAccount(String accountId)
   {
+    accountRepository.getAccount(accountId)
+      .orElseThrow(() -> new AccountNotFoundException(accountId));
     accountRepository.deleteAccount(accountId);
   }
 
-  public void debit (Account account, BigDecimal amount) throws TransactionFailedException
+  @Transactional
+  public void debit(String accountId, BigDecimal amount)
   {
-    if (amount.compareTo(account.getBalance().multiply(new BigDecimal( 0.8))) >= 0)
-      throw new TransactionFailedException("### Debit amount is too high");
-    accountRepository.getAccount(account.getAccountId())
-      .debit(amount);
-  }
-
-  public void credit(Account account, BigDecimal amount) throws TransactionFailedException
-  {
-    accountRepository.getAccount(account.getAccountId())
-      .credit(amount);
-  }
-
-  public void debit (String accountId, BigDecimal amount) throws TransactionFailedException
-  {
-    Account account = accountRepository.getAccount(accountId);
-    if (amount.compareTo(account.getBalance().multiply(new BigDecimal( 0.8))) >= 0)
-      throw new TransactionFailedException("### Debit amount is too high");
+    Account account = accountRepository.getAccount(accountId)
+      .orElseThrow(() -> new AccountNotFoundException(accountId));
+    if (amount.compareTo(account.getBalance()) > 0)
+      throw new InsufficientFundsException(accountId);
     account.debit(amount);
   }
 
+  @Transactional
   public void credit(String accountId, BigDecimal amount)
   {
-    accountRepository.getAccount(accountId)
-      .credit(amount);
-  }
-
-  public List<Account> getAccounts()
-  {
-    return accountRepository.getAccounts();
+    Account account = accountRepository.getAccount(accountId)
+      .orElseThrow(() -> new AccountNotFoundException(accountId));
+    account.credit(amount);
   }
 }

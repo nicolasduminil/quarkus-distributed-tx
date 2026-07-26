@@ -13,31 +13,7 @@
   <dependencies>
     <dependency>
       <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-rest</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-rest-client</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-rest-jsonb</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-rest-client-jsonb</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-smallrye-openapi</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-container-image-docker</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-junit5</artifactId>
+      <artifactId>quarkus-junit</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
@@ -53,13 +29,11 @@
     </dependency>
     <dependency>
       <groupId>fr.simplex-software.workshop</groupId>
-      <artifactId>account</artifactId>
-      <version>1.0-SNAPSHOT</version>
+      <artifactId>common</artifactId>
     </dependency>
     <dependency>
       <groupId>fr.simplex-software.workshop</groupId>
-      <artifactId>common</artifactId>
-      <version>1.0-SNAPSHOT</version>
+      <artifactId>account-repository</artifactId>
     </dependency>
   </dependencies>
   <build>
@@ -68,6 +42,10 @@
       <plugin>
         <groupId>io.quarkus.platform</groupId>
         <artifactId>quarkus-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>io.smallrye</groupId>
+        <artifactId>jandex-maven-plugin</artifactId>
       </plugin>
     </plugins>
   </build>

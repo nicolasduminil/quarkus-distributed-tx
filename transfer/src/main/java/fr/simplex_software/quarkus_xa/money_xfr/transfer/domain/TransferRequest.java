@@ -26,7 +26,7 @@ public class TransferRequest
   )
   private BigDecimal amount;
   @Schema(
-    description = "Transfer currency",
+    description = "TransferDto currency",
     example = "EUR",
     required = true
   )

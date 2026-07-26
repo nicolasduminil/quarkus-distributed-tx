@@ -10,4 +10,14 @@
   </parent>
   <artifactId>common</artifactId>
   <name>Quarkus XA :: the common module</name>
+  <build>
+    <plugins>
+      <!-- Index the shared entities, DTOs and JAX-RS providers so that the
+           account and transfer applications can discover them at build time. -->
+      <plugin>
+        <groupId>io.smallrye</groupId>
+        <artifactId>jandex-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
 </project>

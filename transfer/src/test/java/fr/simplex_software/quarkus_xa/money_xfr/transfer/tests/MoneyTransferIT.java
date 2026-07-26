@@ -1,18 +1,16 @@
 package fr.simplex_software.quarkus_xa.money_xfr.transfer.tests;
 
-import fr.simplex_software.quarkus_xa.money_xfr.account.client.*;
-import fr.simplex_software.quarkus_xa.money_xfr.account.domain.*;
+import fr.simplex_software.quarkus_xa.money_xfr.account_repository.*;
 import fr.simplex_software.quarkus_xa.money_xfr.transfer.domain.*;
+import fr.simplex_software.quarkus_xa.money_xfr.transfer.repository.*;
+import io.quarkus.narayana.jta.*;
 import io.quarkus.test.junit.*;
 import io.restassured.http.*;
 import jakarta.inject.*;
-import jakarta.ws.rs.core.*;
 import org.apache.http.*;
-import org.eclipse.microprofile.rest.client.inject.*;
 import org.junit.jupiter.api.*;
 
 import java.math.*;
-import java.util.*;
 
 import static io.restassured.RestAssured.*;
 import static org.assertj.core.api.Assertions.*;
@@ -22,96 +20,92 @@ import static org.assertj.core.api.Assertions.*;
 public class MoneyTransferIT
 {
   @Inject
-  TransactionalAccountClient transactionalAccountClient;
+  AccountRepository accountRepository;
   @Inject
-  @RestClient
-  AccountRestClient accountRestClient;
+  TransferRepository transferRepository;
+
+  private BigDecimal balanceOf(String accountId)
+  {
+    return QuarkusTransaction.requiringNew()
+      .call(() -> accountRepository.getAccount(accountId).orElseThrow().getBalance());
+  }
+
+  private int transferCount()
+  {
+    return QuarkusTransaction.requiringNew().call(() -> transferRepository.getTransfers().size());
+  }
 
   @Test
   @Order(10)
-  public void testCreateAccount()
+  public void transferShouldDebitSourceAndCreditDestination()
   {
-    assertThat(accountRestClient.createAccount(new Account("ACC123", "nicolas",
-      new BigDecimal(1000), "EUR")).getStatus()).isEqualTo(HttpStatus.SC_OK);
-    assertThat(accountRestClient.createAccount(new Account("ACC321", "nicolas",
-      new BigDecimal(1000), "EUR")).getStatus()).isEqualTo(HttpStatus.SC_OK);
+    given().contentType(ContentType.JSON)
+      .body(new TransferRequest("ACC123", "ACC321", new BigDecimal("150.24"), "EUR"))
+      .when().post("/xfers")
+      .then().statusCode(HttpStatus.SC_OK);
+    // Both XA datasources committed together.
+    assertThat(balanceOf("ACC123")).isEqualByComparingTo("849.76");
+    assertThat(balanceOf("ACC321")).isEqualByComparingTo("1150.24");
+    assertThat(transferCount()).isEqualTo(1);
   }
 
   @Test
   @Order(20)
-  public void testGetAccounts()
+  public void failedTransferShouldRollBackBothDatasources()
   {
-    Response response = accountRestClient.getAccounts();
-    assertThat(response).isNotNull();
-    assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
-    List<Account> accounts = response.readEntity(new GenericType<>()
-    {
-    });
-    assertThat(accounts).isNotNull();
-    assertThat(accounts).hasSize(2);
+    // ACC123 only holds 849.76 now, so 5000 overdraws it -> InsufficientFundsException.
+    given().contentType(ContentType.JSON)
+      .body(new TransferRequest("ACC123", "ACC321", new BigDecimal("5000.00"), "EUR"))
+      .when().post("/xfers")
+      .then().statusCode(HttpStatus.SC_BAD_REQUEST);
+    // Neither the balances (accounts DS) nor the transfer log (xfers DS) changed.
+    assertThat(balanceOf("ACC123")).isEqualByComparingTo("849.76");
+    assertThat(balanceOf("ACC321")).isEqualByComparingTo("1150.24");
+    assertThat(transferCount()).isEqualTo(1);
   }
 
   @Test
   @Order(30)
-  public void testGetAccount()
+  public void unknownAccountShouldReturn404()
   {
-    Response response = accountRestClient.getAccount("ACC123");
-    assertThat(response).isNotNull();
-    assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
-    Account account = response.readEntity(Account.class);
-    assertThat(account).isNotNull();
-    assertThat(account.getAccountId()).isEqualTo("ACC123");
-    assertThat(account.getBalance()).isEqualTo(new BigDecimal(1000));
-    assertThat(account.getCurrency()).isEqualTo("EUR");
-    assertThat(account.getCustomerName()).isEqualTo("nicolas");
+    given().contentType(ContentType.JSON)
+      .body(new TransferRequest("NOPE", "ACC321", new BigDecimal("10.00"), "EUR"))
+      .when().post("/xfers")
+      .then().statusCode(HttpStatus.SC_NOT_FOUND);
+    assertThat(transferCount()).isEqualTo(1);
   }
 
   @Test
   @Order(40)
-  public void testTransferMoney()
+  public void shouldListAndGetTransfers()
   {
-    given().contentType(ContentType.JSON)
-      .body(new TransferRequest("ACC123", "ACC321",
-        new BigDecimal(150.24), "EUR"))
-      .when().post("/xfers").then().statusCode(HttpStatus.SC_OK);
+    String transferId = given().accept(ContentType.JSON)
+      .when().get("/xfers")
+      .then().statusCode(HttpStatus.SC_OK)
+      .extract().jsonPath().getString("[0].transferId");
+    assertThat(transferId).isNotBlank();
+    given().accept(ContentType.JSON)
+      .when().get("/xfers/{id}", transferId)
+      .then().statusCode(HttpStatus.SC_OK)
+      .body("status", org.hamcrest.Matchers.equalTo("COMPLETED"));
+    given().accept(ContentType.JSON)
+      .when().get("/xfers/{id}", "does-not-exist")
+      .then().statusCode(HttpStatus.SC_NOT_FOUND);
   }
 
   @Test
-
   @Order(50)
-  public void testGetAccountAfterTransfer()
+  public void shouldDeleteTransfer()
   {
-    Account account = accountRestClient.getAccount("ACC123")
-      .readEntity(Account.class);
-    assertThat(account.getBalance()).isEqualTo(new BigDecimal(849.76));
-    account = accountRestClient.getAccount("ACC321")
-      .readEntity(Account.class);
-    assertThat(account.getBalance()).isEqualTo(new BigDecimal(1150.24));
-  }
-
-  @Test
-  @Order(60)
-  public void testTransferMoneyFails()
-  {
-    try
-    {
-      given()
-        .contentType(ContentType.JSON)
-        .body(new TransferRequest("ACC123", "ACC321",
-          new BigDecimal(1100), "EUR"))
-        .when()
-        .post("/xfers")
-        .then()
-        .statusCode(HttpStatus.SC_INTERNAL_SERVER_ERROR);
-    }
-    catch (Exception ex)
-    {}
-  }
-
-  @Test
-  @Order(70)
-  public void testGetAccountAfterFailedTransfer()
-  {
-    testGetAccountAfterTransfer();
+    String transferId = given().accept(ContentType.JSON)
+      .when().get("/xfers")
+      .then().statusCode(HttpStatus.SC_OK)
+      .extract().jsonPath().getString("[0].transferId");
+    given().when().delete("/xfers/{id}", transferId)
+      .then().statusCode(HttpStatus.SC_NO_CONTENT);
+    given().accept(ContentType.JSON)
+      .when().get("/xfers/{id}", transferId)
+      .then().statusCode(HttpStatus.SC_NOT_FOUND);
+    assertThat(transferCount()).isZero();
   }
 }

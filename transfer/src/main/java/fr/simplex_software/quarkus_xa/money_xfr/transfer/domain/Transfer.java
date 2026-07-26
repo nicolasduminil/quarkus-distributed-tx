@@ -1,16 +1,29 @@
 package fr.simplex_software.quarkus_xa.money_xfr.transfer.domain;
 
+import jakarta.persistence.*;
+
 import java.math.*;
 import java.time.*;
 
+@Entity
+@Table(name = "XFERS")
 public class Transfer
 {
+  @Id
+  @Column(name = "TRANSFER_ID", length = 20, nullable = false, updatable = false)
   private String transferId;
+  @Column(name = "SOURCE_ACCOUNT_ID", length = 20, nullable = false)
   private String sourceAccountId;
+  @Column(name = "DESTINATION_ACCOUNT_ID", length = 20, nullable = false)
   private String destinationAccountId;
+  @Column(name="TRANSFER_AMOUNT", nullable = false, precision = 19, scale = 2)
   private BigDecimal amount;
+  @Column(name="TRANSFER_CURRENCY", nullable = false, length = 3)
   private String currency;
+  @Enumerated(EnumType.STRING)
+  @Column(name = "TRANSFER_STATUS", nullable = false, length = 20)
   private TransferStatus status;
+  @Column(name = "TRANSFER_DATE_TIME", nullable = false)
   private LocalDateTime timestamp;
 
   public Transfer()
@@ -28,14 +41,26 @@ public class Transfer
     this.timestamp = timestamp;
   }
 
+  public Transfer(TransferDto transferDto)
+  {
+    this (transferDto.getTransferId(), transferDto.getSourceAccountId(), transferDto.getDestinationAccountId(),
+      transferDto.getAmount(), transferDto.getCurrency(), transferDto.getStatus(), transferDto.getTimestamp());
+  }
+
+  public TransferDto toDto()
+  {
+    return new TransferDto(transferId, sourceAccountId, destinationAccountId, amount,
+      currency, status, timestamp);
+  }
+
   public String getTransferId()
   {
     return transferId;
   }
 
-  public void setTransferId(String transactionId)
+  public void setTransferId(String transferId)
   {
-    this.transferId = transactionId;
+    this.transferId = transferId;
   }
 
   public String getSourceAccountId()
