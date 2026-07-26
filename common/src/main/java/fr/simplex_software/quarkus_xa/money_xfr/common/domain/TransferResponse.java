@@ -1,4 +1,4 @@
-package fr.simplex_software.quarkus_xa.money_xfr.transfer.domain;
+package fr.simplex_software.quarkus_xa.money_xfr.common.domain;
 
 import java.time.*;
 

@@ -2,6 +2,7 @@ package fr.simplex_software.quarkus_xa.money_xfr.transfer.service;
 
 import fr.simplex_software.quarkus_xa.money_xfr.account_repository.*;
 import fr.simplex_software.quarkus_xa.money_xfr.common.exception.*;
+import fr.simplex_software.quarkus_xa.money_xfr.common.domain.*;
 import fr.simplex_software.quarkus_xa.money_xfr.transfer.domain.*;
 import fr.simplex_software.quarkus_xa.money_xfr.transfer.exception.*;
 import fr.simplex_software.quarkus_xa.money_xfr.transfer.repository.*;

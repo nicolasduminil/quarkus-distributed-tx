@@ -5,11 +5,11 @@
   <modelVersion>4.0.0</modelVersion>
   <parent>
     <groupId>fr.simplex-software.workshop</groupId>
-    <artifactId>quarkus-xa</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <artifactId>quarkus-distributed-tx</artifactId>
+    <version>2.0.0-SNAPSHOT</version>
   </parent>
   <artifactId>account-repository</artifactId>
-  <name>Quarkus XA :: the account repository module</name>
+  <name>Quarkus Distributed TX :: the account repository module</name>
   <build>
     <plugins>
       <!-- Index the entity, DTO and repository bean so the account and transfer

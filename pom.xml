@@ -4,16 +4,21 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <groupId>fr.simplex-software.workshop</groupId>
-  <artifactId>quarkus-xa</artifactId>
+  <artifactId>quarkus-distributed-tx</artifactId>
   <packaging>pom</packaging>
-  <name>Quarkus XA :: The Master POM</name>
+  <name>Quarkus Distributed TX :: The Master POM</name>
+  <!-- Module order matters: `account` must build before `transfer-lra`, whose
+       integration tests start the account service container image produced by
+       `quarkus.container-image.build=true`. -->
   <modules>
     <module>common</module>
     <module>account-repository</module>
+    <module>transfer-tck</module>
     <module>account</module>
     <module>transfer</module>
+    <module>transfer-lra</module>
   </modules>
-  <version>1.0-SNAPSHOT</version>
+  <version>2.0.0-SNAPSHOT</version>
   <properties>
     <maven.compiler.source>21</maven.compiler.source>
     <maven.compiler.target>21</maven.compiler.target>
@@ -33,17 +38,22 @@
       <dependency>
         <groupId>fr.simplex-software.workshop</groupId>
         <artifactId>account</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>${project.version}</version>
       </dependency>
       <dependency>
         <groupId>fr.simplex-software.workshop</groupId>
         <artifactId>common</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>${project.version}</version>
       </dependency>
       <dependency>
         <groupId>fr.simplex-software.workshop</groupId>
         <artifactId>account-repository</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>fr.simplex-software.workshop</groupId>
+        <artifactId>transfer-tck</artifactId>
+        <version>${project.version}</version>
       </dependency>
     </dependencies>
   </dependencyManagement>
@@ -60,13 +70,16 @@
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-rest-client</artifactId>
     </dependency>
+    <!-- Jackson rather than JSON-B: quarkus-narayana-lra hard-requires
+         quarkus-rest-jackson, and running two JSON providers side by side makes
+         it ambiguous which one serialises a given payload. -->
     <dependency>
       <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-rest-jsonb</artifactId>
+      <artifactId>quarkus-rest-jackson</artifactId>
     </dependency>
     <dependency>
       <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-rest-client-jsonb</artifactId>
+      <artifactId>quarkus-rest-client-jackson</artifactId>
     </dependency>
     <dependency>
       <groupId>io.quarkus</groupId>

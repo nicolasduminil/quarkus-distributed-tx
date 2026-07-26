@@ -3,20 +3,22 @@ version: 2.1
 jobs:
   build-and-test:
     # A machine executor is required: the integration tests use Testcontainers
-    # (Quarkus Dev Services) to start two PostgreSQL databases.
+    # (Quarkus Dev Services) to start two PostgreSQL databases, the LRA
+    # coordinator and the account service container.
     machine:
       image: ubuntu-2404:current
     steps:
       - checkout
       - restore_cache:
           keys:
-            - quarkus-xa-m2-{{ checksum "pom.xml" }}
-            - quarkus-xa-m2-
+            - quarkus-distributed-tx-m2-{{ checksum "pom.xml" }}
+            - quarkus-distributed-tx-m2-
       - run:
-          name: Build and run the XA integration tests
+          name: Build and run the XA and LRA integration tests
           command: mvn -B verify
+          no_output_timeout: 20m
       - save_cache:
-          key: quarkus-xa-m2-{{ checksum "pom.xml" }}
+          key: quarkus-distributed-tx-m2-{{ checksum "pom.xml" }}
           paths:
             - ~/.m2
 

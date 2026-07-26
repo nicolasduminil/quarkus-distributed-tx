@@ -32,22 +32,56 @@ services:
       retries: 10
 
 
+  # Database for the saga transfer log. The XA stack and the LRA stack keep
+  # separate transfer logs so both can run at once against the same accounts.
+  xfers-lra-db:
+    image: postgres:17
+    container_name: xfer-lra-db
+    environment:
+      POSTGRES_DB: xfers
+      POSTGRES_USER: quarkus
+      POSTGRES_PASSWORD: quarkus
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U quarkus -d xfers" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # The saga coordinator. Unlike the JTA transaction manager - which is embedded
+  # in the XA transfer service - an LRA coordinator is a separate process that
+  # both participants must be able to reach, and which must be able to call them
+  # back. It listens on 8080 inside the container.
+  lra-coordinator:
+    image: quay.io/jbosstm/lra-coordinator:latest
+    container_name: lra-coordinator
+    ports:
+      - "50000:8080"
+
   account:
-    image: nicolasduminil/account:1.0-SNAPSHOT
+    image: nicolasduminil/account:2.0.0-SNAPSHOT
     container_name: accounts
     depends_on:
       accounts-db:
         condition: service_healthy
+      lra-coordinator:
+        condition: service_started
     environment:
       QUARKUS_PROFILE: prod
       QUARKUS_DATASOURCE_ACCOUNTS_JDBC_URL: jdbc:postgresql://accounts-db:5432/accounts
       QUARKUS_DATASOURCE_ACCOUNTS_USERNAME: quarkus
       QUARKUS_DATASOURCE_ACCOUNTS_PASSWORD: quarkus
+      QUARKUS_LRA_COORDINATOR_URL: http://lra-coordinator:8080/lra-coordinator
+      # How the coordinator calls this participant back for @Complete /
+      # @Compensate. Without it the participant would advertise a URL that is
+      # only meaningful from the caller's side of the network.
+      QUARKUS_LRA_BASE_URI: http://accounts:8081
     ports:
       - "8081:8081"
 
   transfer:
-    image: nicolasduminil/transfer:1.0-SNAPSHOT
+    image: nicolasduminil/transfer:2.0.0-SNAPSHOT
     container_name: xfers
     depends_on:
       accounts-db:
@@ -66,3 +100,27 @@ services:
       QUARKUS_DATASOURCE_XFERS_PASSWORD: quarkus
     ports:
       - "8080:8080"
+
+  # The saga counterpart of `transfer`. Note what it is NOT given: any connection
+  # to accounts-db. It can only reach balances through the account service's API,
+  # which is the whole architectural difference from the XA stack above.
+  transfer-lra:
+    image: nicolasduminil/transfer-lra:2.0.0-SNAPSHOT
+    container_name: xfers-lra
+    depends_on:
+      xfers-lra-db:
+        condition: service_healthy
+      lra-coordinator:
+        condition: service_started
+      account:
+        condition: service_started
+    environment:
+      QUARKUS_PROFILE: prod
+      QUARKUS_DATASOURCE_XFERS_JDBC_URL: jdbc:postgresql://xfers-lra-db:5432/xfers
+      QUARKUS_DATASOURCE_XFERS_USERNAME: quarkus
+      QUARKUS_DATASOURCE_XFERS_PASSWORD: quarkus
+      QUARKUS_LRA_COORDINATOR_URL: http://lra-coordinator:8080/lra-coordinator
+      QUARKUS_LRA_BASE_URI: http://xfers-lra:8090
+      QUARKUS_REST_CLIENT_ACCOUNT_LRA_URL: http://accounts:8081
+    ports:
+      - "8090:8090"

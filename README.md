@@ -1,11 +1,20 @@
-# Quarkus XA — distributed money transfer with Narayana 2PC
+# Quarkus Distributed TX — the same money transfer, twice
 
-A small Quarkus workshop demonstrating a **genuine two-phase commit (2PC)** across
-two XA datasources, coordinated by Narayana. A money transfer atomically debits
-the source account, credits the destination account and records the transfer;
-if anything fails (e.g. insufficient funds) **every** datasource rolls back.
+A Quarkus workshop that implements one money-transfer use case **two ways**, so the
+two dominant answers to distributed consistency can be compared side by side on
+identical code:
 
-This is the XA/2PC baseline that the planned LRA/Saga variant will be compared against.
+- **XA / 2PC** (`transfer`, port 8080) — a genuine two-phase commit across two XA
+  datasources, coordinated by Narayana.
+- **Saga / MicroProfile LRA** (`transfer-lra`, port 8090) — compensation-based
+  consistency across autonomous services, coordinated by a Narayana LRA coordinator.
+
+Both expose the **same `/xfers` REST contract** and are driven by the **same shared
+test suite** (`transfer-tck`), so any difference you observe is a difference in
+transaction strategy and nothing else.
+
+> **Status.** Both stacks are complete and fully tested — `mvn clean verify` runs
+> 17 integration tests across the two implementations, none skipped.
 
 ## Architecture
 
@@ -79,6 +88,54 @@ rolls back both branches. With `quarkus.transaction-manager.enable-recovery=true
 the Narayana recovery manager replays the object store to resolve in-doubt branches
 if the JVM dies between prepare and commit.
 
+## The saga alternative
+
+Where the XA stack co-locates the resource managers, the LRA stack does the
+opposite: `transfer-lra` has **no access to the accounts database at all** and can
+only ask the account service over HTTP. Consistency is no longer atomic — it is
+reconstructed afterwards by a coordinator driving every participant to the same
+outcome.
+
+```
+transfer-lra (LRA initiator)  ──  @LRA(REQUIRED) on POST /xfers
+ ├─ HTTP → account service : reserve debit  (balance untouched)
+ ├─ HTTP → account service : reserve credit (balance untouched)
+ └─ own xfers DB           : Transfer(PENDING)
+Coordinator closes the LRA → @Complete on every participant → holds applied
+Anything throws            → @Compensate on every participant → holds released
+```
+
+**Reserve-then-confirm, not act-then-compensate.** The naive saga debits
+immediately and credits the money back on failure. That is wrong twice over: the
+balance visibly dips and recovers, which any concurrent reader can observe, and
+the compensating credit can itself fail and strand the saga. Here a debit only
+records a PENDING `Reservation`; `@Complete` applies it and `@Compensate` drops
+it. Because the balance never moved, **there is no compensating write that can
+fail**. Available funds are `balance − Σ pending debits`, exposed at
+`GET /lra/accounts/{id}/availability`.
+
+**Participants must be idempotent.** A coordinator retries `@Complete` and
+`@Compensate` until it gets an answer, so a participant that applies its effect
+twice corrupts the balance. Both participants key their work on the LRA id and
+treat any non-PENDING state as already handled, and both expose `@Status` so the
+coordinator can re-ask after a crash. This is the part that is usually skipped and
+the part that actually bites in production.
+
+### What actually differs
+
+| | XA / 2PC | Saga / LRA |
+|---|---|---|
+| Coordinator | Embedded (Narayana JTA) | **Separate process** that must call participants back |
+| Service autonomy | None — shared accounts database | Full — only the account service touches balances |
+| Isolation | Total; nothing observable until commit | A hold **is** observable while in flight |
+| Failure | Rollback leaves **no trace** | Leaves a `COMPENSATED` audit row |
+| Coupling | Both services must be up and enlisted | Participants can be completed later |
+| Blocking | Resources locked between prepare and commit | No locks held across the saga |
+
+That fourth row is why the shared contract counts *completed* transfers rather
+than all rows: "we tried and undid it" is a real saga outcome, not a failure to
+paper over.
+
 ## Why not XA over REST?
 
 An earlier iteration had the transfer service call the account service's
@@ -101,10 +158,12 @@ the cost of trading atomicity for eventual consistency with compensations.
 
 | Module               | Role                                                                                                                                                                           |
 |----------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `common`             | Shared library: `Common` utility, the application exception hierarchy (`ApplicationException`, `AccountNotFoundException`, `InsufficientFundsException`, `InvalidAmountException`) and the single `ApplicationExceptionMapper` that maps them to HTTP status codes. |
-| `account-repository` | Shared persistence layer for accounts: the `Account` entity, `AccountDto`, the `AccountRepository` interface and its two implementations. Used by **both** applications, which is what lets the transfer service enlist the `accounts` datasource in its own JTA transaction. |
-| `account`            | Standalone account microservice (port 8081). Owns the `accounts` schema. Full account CRUD plus debit/credit endpoints.                                                          |
-| `transfer`           | Transfer microservice / XA coordinator (port 8080). Two XA datasources (`accounts`, `xfers`). Transfer CRUD plus the 2PC transfer operation.                                     |
+| `common`             | Shared library: `Common` utility, the transfer DTOs (`TransferDto`, `TransferRequest`, `TransferResponse`, `TransferStatus`), the application exception hierarchy and the single `ApplicationExceptionMapper` that maps them to HTTP status codes. |
+| `account-repository` | Shared persistence layer for accounts: the `Account` entity, `AccountDto`, the `AccountRepository` interface and its two implementations. Depended on by `account` and by `transfer` — and pointedly **not** by `transfer-lra`. |
+| `transfer-tck`       | The REST contract both transfer implementations must satisfy, as an abstract test class. Test tooling is at compile scope so consumers depend on it with `<scope>test</scope>`.   |
+| `account`            | Account microservice (port 8081). Owns the `accounts` schema. CRUD + debit/credit, **plus** the LRA participant endpoints under `/lra/accounts`.                                  |
+| `transfer`           | XA coordinator (port 8080). Two XA datasources (`accounts`, `xfers`). Transfer CRUD plus the 2PC transfer operation.                                                             |
+| `transfer-lra`       | Saga orchestrator (port 8090). One plain datasource for its own transfer log; reaches balances only through the account service's API.                                           |
 
 Each repository has two implementations: an in-memory one (`DefaultAccountRepository`,
 `DefaultTransferRepository`) and a JPA/Panache one (`AccountRepositoryXA`,
@@ -140,12 +199,60 @@ generation or seeding happens.
 mvn clean verify
 ```
 
-- `MoneyTransferIT` (transfer): happy path, `unknownAccountShouldReturn404`,
-  transfer CRUD, and `failedTransferShouldRollBackBothDatasources`, which proves
-  atomicity — after an overdrawing transfer returns `400`, both the balances
-  (accounts DS) and the transfer log (xfers DS) are unchanged.
+- `AbstractMoneyTransferContractIT` (transfer-tck): the shared scenarios — happy
+  path, insufficient funds leaving everything unchanged, unknown account, listing
+  and deletion. Assertions are on **deltas**, and the balance/count probes are
+  **abstract**, because the XA service can read the databases directly while the
+  saga service can only ask over HTTP. Failure paths assert the **response body**
+  as well as the status — both stacks must return the business error rather than
+  transaction plumbing, which a status-only assertion would not catch.
+- `MoneyTransferIT` (transfer): the contract against XA, with repository-based probes.
+- `MoneyTransferSagaIT` (transfer-lra): the contract against LRA, with HTTP probes,
+  plus saga-only assertions about the `COMPENSATED` audit row and released holds.
 - `AccountResourceIT` (account): account CRUD, debit/credit, 404 on unknown account,
-  and rejection of overdrafts and invalid amounts.
+  and rejection of overdrafts and invalid amounts. Unchanged by the LRA work, which
+  is how we know the participant endpoints were added additively.
+
+### Gotcha: a participant must not cancel the saga
+
+`@LRA`'s `end = false` only stops a method ending the LRA **on success**. The default
+`cancelOnFamily = {CLIENT_ERROR, SERVER_ERROR}` still applies, so a participant that
+answers 400 cancels the entire saga on its own initiative. The orchestrator then
+tries to cancel an LRA the coordinator has already discarded, gets a 503, and the
+LRA filter **replaces your business error with `CancelFailed`** — a correct status
+code wrapped around a useless body.
+
+Participant methods here therefore use:
+
+```java
+@LRA(value = LRA.Type.MANDATORY, end = false, cancelOnFamily = {})
+```
+
+A participant reports; the orchestrator decides. The tell-tale in the coordinator
+log is `Cannot find transaction id: ...` at the moment the initiator tries to
+cancel.
+
+### Gotcha: `@Consumes` on the LRA callbacks
+
+An LRA participant class typically carries a class-level
+`@Consumes(MediaType.APPLICATION_JSON)` for its business endpoints. The coordinator
+does **not** send JSON when it calls `@Complete`/`@Compensate`/`@Status`/`@Forget`,
+so JAX-RS rejects those callbacks with **415 Unsupported Media Type** before your
+code ever runs. Nothing is logged on the participant side, the LRA simply hangs in
+`Closing` forever, and the saga looks broken for no visible reason.
+
+Every callback here therefore carries an explicit `@Consumes(MediaType.WILDCARD)`.
+If a saga ever stalls with holds that never settle, the first thing to check is the
+coordinator's own log:
+
+```bash
+docker logs lra-coordinator | grep "LRAParticipantRecord.doEnd"
+# ...put http://accounts:8081/lra/accounts/complete... failed with status: 415
+```
+
+The coordinator's REST API is the other diagnostic worth knowing —
+`GET :50000/lra-coordinator` lists LRAs and their status, so a stuck saga shows up
+as `"status":"Closing","recovering":true`.
 
 ## Continuous integration
 
@@ -161,10 +268,31 @@ mvn clean package
 docker compose up
 ```
 
-`docker-compose.yaml` starts two PostgreSQL instances — `accounts-db` (5432) and
-`xfers-db` (5433), each with `max_prepared_transactions=100` (required for XA
-prepared transactions) — plus the `account` and `transfer` services, both running
-under the `prod` profile.
+`docker-compose.yaml` starts the whole comparison:
+
+| Service | Port | Role |
+|---|---|---|
+| `accounts-db` | 5432 | Accounts, `max_prepared_transactions=100` for XA |
+| `xfers-db` | 5433 | XA transfer log, `max_prepared_transactions=100` |
+| `xfers-lra-db` | 5434 | Saga transfer log (no XA needed) |
+| `lra-coordinator` | 50000 | `quay.io/jbosstm/lra-coordinator` |
+| `account` | 8081 | CRUD + LRA participant |
+| `transfer` | 8080 | XA/2PC |
+| `transfer-lra` | 8090 | Saga/LRA |
+
+Both transfer services run against the same accounts, so you can drive the same
+transfer through each and compare:
+
+```bash
+BODY='{"sourceAccountId":"ACC1","destinationAccountId":"ACC2","amount":10.00,"currency":"EUR"}'
+curl -s -XPOST -H 'Content-Type: application/json' -d "$BODY" http://localhost:8080/xfers  # XA
+curl -s -XPOST -H 'Content-Type: application/json' -d "$BODY" http://localhost:8090/xfers  # Saga
+curl -s http://localhost:8081/lra/accounts/ACC1/availability                                # holds
+```
+
+Note `QUARKUS_LRA_BASE_URI` on the two participants: it is the address the
+coordinator uses to call them back, and without it a participant advertises a URL
+that is only meaningful from its own side of the network.
 
 ## Notes
 

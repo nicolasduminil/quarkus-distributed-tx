@@ -1,5 +1,7 @@
 package fr.simplex_software.quarkus_xa.money_xfr.transfer.domain;
 
+import fr.simplex_software.quarkus_xa.money_xfr.common.domain.*;
+
 import jakarta.persistence.*;
 
 import java.math.*;

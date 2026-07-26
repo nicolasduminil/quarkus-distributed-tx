@@ -1,41 +1,47 @@
-package fr.simplex_software.quarkus_xa.money_xfr.transfer.domain;
+package fr.simplex_software.quarkus_xa.money_xfr.common.domain;
+
+import org.eclipse.microprofile.openapi.annotations.media.*;
 
 import java.math.*;
-import java.time.*;
 
-public class TransferDto
+public class TransferRequest
 {
-  private String transferId;
+  @Schema(
+    description = "Source account ID",
+    example = "ACC123",
+    required = true
+  )
   private String sourceAccountId;
+  @Schema(
+    description = "Destination account ID",
+    example = "ACC123",
+    required = true
+  )
   private String destinationAccountId;
+  @Schema(
+    description = "Amount to transfer",
+    example = "100.50",
+    required = true,
+    minimum = "0.01"
+  )
   private BigDecimal amount;
+  @Schema(
+    description = "TransferDto currency",
+    example = "EUR",
+    required = true
+  )
   private String currency;
-  private TransferStatus status;
-  private LocalDateTime timestamp;
 
-  public TransferDto()
+  public TransferRequest()
   {
   }
 
-  public TransferDto(String transferId, String sourceAccountId, String destinationAccountId, BigDecimal amount, String currency, TransferStatus status, LocalDateTime timestamp)
+  public TransferRequest(String sourceAccountId, String destinationAccountId, BigDecimal amount, String currency)
   {
-    this.transferId = transferId;
     this.sourceAccountId = sourceAccountId;
     this.destinationAccountId = destinationAccountId;
     this.amount = amount;
     this.currency = currency;
-    this.status = status;
-    this.timestamp = timestamp;
-  }
-
-  public String getTransferId()
-  {
-    return transferId;
-  }
-
-  public void setTransferId(String transactionId)
-  {
-    this.transferId = transactionId;
   }
 
   public String getSourceAccountId()
@@ -76,25 +82,5 @@ public class TransferDto
   public void setCurrency(String currency)
   {
     this.currency = currency;
-  }
-
-  public TransferStatus getStatus()
-  {
-    return status;
-  }
-
-  public void setStatus(TransferStatus status)
-  {
-    this.status = status;
-  }
-
-  public LocalDateTime getTimestamp()
-  {
-    return timestamp;
-  }
-
-  public void setTimestamp(LocalDateTime timestamp)
-  {
-    this.timestamp = timestamp;
   }
 }

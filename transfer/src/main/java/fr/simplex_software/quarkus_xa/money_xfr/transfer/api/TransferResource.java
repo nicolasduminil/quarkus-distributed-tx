@@ -1,5 +1,6 @@
 package fr.simplex_software.quarkus_xa.money_xfr.transfer.api;
 
+import fr.simplex_software.quarkus_xa.money_xfr.common.domain.*;
 import fr.simplex_software.quarkus_xa.money_xfr.transfer.domain.*;
 import fr.simplex_software.quarkus_xa.money_xfr.transfer.service.*;
 import jakarta.enterprise.context.*;

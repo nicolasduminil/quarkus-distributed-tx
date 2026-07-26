@@ -5,11 +5,11 @@
   <modelVersion>4.0.0</modelVersion>
   <parent>
     <groupId>fr.simplex-software.workshop</groupId>
-    <artifactId>quarkus-xa</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <artifactId>quarkus-distributed-tx</artifactId>
+    <version>2.0.0-SNAPSHOT</version>
   </parent>
   <artifactId>account</artifactId>
-  <name>Quarkus XA :: the Account module</name>
+  <name>Quarkus Distributed TX :: the Account module</name>
   <dependencies>
     <dependency>
       <groupId>fr.simplex-software.workshop</groupId>
@@ -18,6 +18,12 @@
     <dependency>
       <groupId>fr.simplex-software.workshop</groupId>
       <artifactId>account-repository</artifactId>
+    </dependency>
+    <!-- Turns this service into a saga participant. The XA stack does not use it;
+         the plain CRUD and debit/credit endpoints are unaffected. -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-narayana-lra</artifactId>
     </dependency>
     <dependency>
       <groupId>io.quarkus</groupId>
