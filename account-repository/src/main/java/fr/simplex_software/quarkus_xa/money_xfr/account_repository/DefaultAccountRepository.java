@@ -5,11 +5,6 @@ import jakarta.enterprise.inject.*;
 
 import java.util.*;
 
-/**
- * In-memory implementation, useful for demos/tests without a database. It is the
- * CDI {@code @Default} alternative; select {@link AccountRepositoryXA} instead
- * via {@code quarkus.arc.selected-alternatives} for the real XA behaviour.
- */
 @ApplicationScoped
 @Alternative
 @Default

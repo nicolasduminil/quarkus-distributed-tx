@@ -14,7 +14,7 @@ test suite** (`transfer-tck`), so any difference you observe is a difference in
 transaction strategy and nothing else.
 
 > **Status.** Both stacks are complete and fully tested — `mvn clean verify` runs
-> 17 integration tests across the two implementations, none skipped.
+> 18 integration tests across the two implementations, none skipped.
 
 ## Architecture
 
@@ -22,13 +22,13 @@ transaction strategy and nothing else.
 Transfer service (XA coordinator)  ──  one @Transactional
  ├─ accounts datasource (XA)  : debit(source) + credit(destination)
  └─ xfers   datasource (XA)  : insert Transfer(COMPLETED)
-Narayana: prepare(accounts) + prepare(xfers)  →  commit both, or rollback both
+Narayana: prepare(accounts) + prepare(xfers), then commit both or roll back both
 ```
 
 Real 2PC requires the coordinator to hold the resource managers, so the
 transactional path is co-located in the transfer service, which owns both XA
 datasources. The account service remains a separate, standalone microservice for
-account CRUD.
+account CRUD, and separately acts as a saga participant for the LRA stack.
 
 ## Where Narayana actually drives the two-phase commit
 
@@ -98,11 +98,14 @@ outcome.
 
 ```
 transfer-lra (LRA initiator)  ──  @LRA(REQUIRED) on POST /xfers
- ├─ HTTP → account service : reserve debit  (balance untouched)
- ├─ HTTP → account service : reserve credit (balance untouched)
- └─ own xfers DB           : Transfer(PENDING)
-Coordinator closes the LRA → @Complete on every participant → holds applied
-Anything throws            → @Compensate on every participant → holds released
+ ├─ account service, over HTTP : reserve debit  (balance untouched)
+ ├─ account service, over HTTP : reserve credit (balance untouched)
+ └─ own xfers datasource       : Transfer(PENDING)
+
+On success the coordinator closes the LRA, calls @Complete on every
+participant, and the reservations are applied.
+On any exception it cancels instead, calls @Compensate on every
+participant, and the reservations are released.
 ```
 
 **Reserve-then-confirm, not act-then-compensate.** The naive saga debits
@@ -127,7 +130,7 @@ the part that actually bites in production.
 |---|---|---|
 | Coordinator | Embedded (Narayana JTA) | **Separate process** that must call participants back |
 | Service autonomy | None — shared accounts database | Full — only the account service touches balances |
-| Isolation | Total; nothing observable until commit | A hold **is** observable while in flight |
+| Isolation | Total; nothing observable until commit | A reservation **is** observable while in flight |
 | Failure | Rollback leaves **no trace** | Leaves a `COMPENSATED` audit row |
 | Coupling | Both services must be up and enlisted | Participants can be completed later |
 | Blocking | Resources locked between prepare and commit | No locks held across the saga |
@@ -151,8 +154,8 @@ coordinator that reaches both databases directly, over two XA datasources, in on
 JVM. The price is architectural: the transfer service reads and writes the
 `accounts` database rather than going through the account service's API — the two
 services share a database. That coupling is inherent to XA across service
-boundaries, and it is precisely what the planned LRA/Saga variant will avoid, at
-the cost of trading atomicity for eventual consistency with compensations.
+boundaries, and it is precisely what the LRA/Saga variant above avoids, at the
+cost of trading atomicity for eventual consistency with compensations.
 
 ## Modules
 
@@ -208,7 +211,7 @@ mvn clean verify
   transaction plumbing, which a status-only assertion would not catch.
 - `MoneyTransferIT` (transfer): the contract against XA, with repository-based probes.
 - `MoneyTransferSagaIT` (transfer-lra): the contract against LRA, with HTTP probes,
-  plus saga-only assertions about the `COMPENSATED` audit row and released holds.
+  plus saga-only assertions about the `COMPENSATED` audit row and released reservations.
 - `AccountResourceIT` (account): account CRUD, debit/credit, 404 on unknown account,
   and rejection of overdrafts and invalid amounts. Unchanged by the LRA work, which
   is how we know the participant endpoints were added additively.
@@ -242,7 +245,7 @@ code ever runs. Nothing is logged on the participant side, the LRA simply hangs 
 `Closing` forever, and the saga looks broken for no visible reason.
 
 Every callback here therefore carries an explicit `@Consumes(MediaType.WILDCARD)`.
-If a saga ever stalls with holds that never settle, the first thing to check is the
+If a saga ever stalls with reservations that never settle, the first thing to check is the
 coordinator's own log:
 
 ```bash
@@ -265,7 +268,7 @@ one because the integration tests start two PostgreSQL containers via Testcontai
 ```bash
 # Build the container images (container-image.build=true is enabled)
 mvn clean package
-docker compose up
+docker compose up -d
 ```
 
 `docker-compose.yaml` starts the whole comparison:
@@ -287,7 +290,7 @@ transfer through each and compare:
 BODY='{"sourceAccountId":"ACC1","destinationAccountId":"ACC2","amount":10.00,"currency":"EUR"}'
 curl -s -XPOST -H 'Content-Type: application/json' -d "$BODY" http://localhost:8080/xfers  # XA
 curl -s -XPOST -H 'Content-Type: application/json' -d "$BODY" http://localhost:8090/xfers  # Saga
-curl -s http://localhost:8081/lra/accounts/ACC1/availability                                # holds
+curl -s http://localhost:8081/lra/accounts/ACC1/availability                                # reservations
 ```
 
 Note `QUARKUS_LRA_BASE_URI` on the two participants: it is the address the

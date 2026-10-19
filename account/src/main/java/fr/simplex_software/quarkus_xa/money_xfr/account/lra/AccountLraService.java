@@ -9,19 +9,14 @@ import org.eclipse.microprofile.lra.annotation.*;
 
 import java.math.*;
 import java.util.*;
+import java.util.stream.*;
 
-/**
- * The saga participant logic for accounts, using reserve-then-confirm.
- * <p>
- * Every method here is <b>idempotent</b>, which is not optional: an LRA
- * coordinator retries {@code @Complete} and {@code @Compensate} until it gets an
- * answer, so a participant that applies its effect twice corrupts the balance.
- * Idempotency is enforced by keying reservations on the LRA id and by treating
- * any non-PENDING reservation as already handled.
- */
 @ApplicationScoped
 public class AccountLraService
 {
+  private static final List<ReservationState> SETTLEMENT_ORDER =
+    List.of(ReservationState.PENDING, ReservationState.RELEASED, ReservationState.CONFIRMED);
+
   @Inject
   AccountRepository accountRepository;
   @Inject
@@ -32,11 +27,12 @@ public class AccountLraService
   {
     Account account = requireAccount(accountId);
     requirePositive(accountId, amount);
-    if (reservations.find(lraId, accountId, ReservationType.DEBIT).isPresent())
-      return;
-    if (available(account).compareTo(amount) < 0)
-      throw new InsufficientFundsException(accountId);
-    reservations.persist(new Reservation(lraId, accountId, amount, ReservationType.DEBIT));
+    if (reservations.find(lraId, accountId, ReservationType.DEBIT).isEmpty())
+    {
+      if (available(account).compareTo(amount) < 0)
+        throw new InsufficientFundsException(accountId);
+      reservations.persist(new Reservation(lraId, accountId, amount, ReservationType.DEBIT));
+    }
   }
 
   @Transactional
@@ -44,50 +40,35 @@ public class AccountLraService
   {
     requireAccount(accountId);
     requirePositive(accountId, amount);
-    if (reservations.find(lraId, accountId, ReservationType.CREDIT).isPresent())
-      return;
-    reservations.persist(new Reservation(lraId, accountId, amount, ReservationType.CREDIT));
+    if (reservations.find(lraId, accountId, ReservationType.CREDIT).isEmpty())
+      reservations.persist(new Reservation(lraId, accountId, amount, ReservationType.CREDIT));
   }
 
-  /** Applies every hold taken for this saga. Safe to call repeatedly. */
   @Transactional
   public ParticipantStatus complete(String lraId)
   {
-    for (Reservation reservation : reservations.findByLra(lraId))
-    {
-      if (reservation.getState() != ReservationState.PENDING)
-        continue;
-      Account account = requireAccount(reservation.getAccountId());
-      account.setBalance(account.getBalance().add(reservation.signedAmount()));
-      reservation.setState(ReservationState.CONFIRMED);
-    }
+    pendingFor(lraId).forEach(this::confirm);
     return ParticipantStatus.Completed;
   }
 
-  /**
-   * Releases every hold taken for this saga. Because the balances were never
-   * touched there is no compensating write to make — and therefore no
-   * compensating write that can fail.
-   */
   @Transactional
   public ParticipantStatus compensate(String lraId)
   {
-    for (Reservation reservation : reservations.findByLra(lraId))
-      if (reservation.getState() == ReservationState.PENDING)
-        reservation.setState(ReservationState.RELEASED);
+    pendingFor(lraId).forEach(reservation -> reservation.setState(ReservationState.RELEASED));
     return ParticipantStatus.Compensated;
   }
 
   public Optional<ParticipantStatus> status(String lraId)
   {
-    List<Reservation> found = reservations.findByLra(lraId);
-    if (found.isEmpty())
-      return Optional.empty();
-    if (found.stream().anyMatch(r -> r.getState() == ReservationState.PENDING))
-      return Optional.of(ParticipantStatus.Active);
-    if (found.stream().allMatch(r -> r.getState() == ReservationState.CONFIRMED))
-      return Optional.of(ParticipantStatus.Completed);
-    return Optional.of(ParticipantStatus.Compensated);
+    return reservations.findByLra(lraId).stream()
+      .map(Reservation::getState)
+      .min(Comparator.comparingInt(SETTLEMENT_ORDER::indexOf))
+      .map(state -> switch (state)
+      {
+        case PENDING -> ParticipantStatus.Active;
+        case RELEASED -> ParticipantStatus.Compensated;
+        case CONFIRMED -> ParticipantStatus.Completed;
+      });
   }
 
   @Transactional
@@ -96,18 +77,25 @@ public class AccountLraService
     reservations.deleteByLra(lraId);
   }
 
-  /**
-   * What the account can actually spend right now: the settled balance minus
-   * everything held by sagas still in flight. This is the number a saga must
-   * check against — the raw balance would allow two concurrent transfers to each
-   * reserve the same money.
-   */
   @Transactional
   public AvailabilityDto availability(String accountId)
   {
     Account account = requireAccount(accountId);
     BigDecimal held = reservations.pendingDebits(accountId);
     return new AvailabilityDto(accountId, account.getBalance(), held, account.getBalance().subtract(held));
+  }
+
+  private Stream<Reservation> pendingFor(String lraId)
+  {
+    return reservations.findByLra(lraId).stream()
+      .filter(reservation -> reservation.getState() == ReservationState.PENDING);
+  }
+
+  private void confirm(Reservation reservation)
+  {
+    Account account = requireAccount(reservation.getAccountId());
+    account.setBalance(account.getBalance().add(reservation.signedAmount()));
+    reservation.setState(ReservationState.CONFIRMED);
   }
 
   private BigDecimal available(Account account)

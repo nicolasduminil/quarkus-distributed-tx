@@ -20,7 +20,6 @@ public class ReservationRepository implements PanacheRepository<Reservation>
       .firstResultOptional();
   }
 
-  /** Total of the debits currently held against an account but not yet applied. */
   public BigDecimal pendingDebits(String accountId)
   {
     return list("accountId = ?1 and type = ?2 and state = ?3",

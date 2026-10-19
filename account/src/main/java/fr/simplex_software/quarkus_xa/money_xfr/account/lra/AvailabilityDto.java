@@ -2,10 +2,6 @@ package fr.simplex_software.quarkus_xa.money_xfr.account.lra;
 
 import java.math.*;
 
-/**
- * Exposes the gap between what an account holds and what it can spend. The XA
- * stack has no equivalent: under 2PC there is no observable in-between state.
- */
 public class AvailabilityDto
 {
   private String accountId;

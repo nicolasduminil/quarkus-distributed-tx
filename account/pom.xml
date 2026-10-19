@@ -19,8 +19,6 @@
       <groupId>fr.simplex-software.workshop</groupId>
       <artifactId>account-repository</artifactId>
     </dependency>
-    <!-- Turns this service into a saga participant. The XA stack does not use it;
-         the plain CRUD and debit/credit endpoints are unaffected. -->
     <dependency>
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-narayana-lra</artifactId>

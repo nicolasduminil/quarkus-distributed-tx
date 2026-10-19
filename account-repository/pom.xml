@@ -12,8 +12,6 @@
   <name>Quarkus Distributed TX :: the account repository module</name>
   <build>
     <plugins>
-      <!-- Index the entity, DTO and repository bean so the account and transfer
-           applications discover them at build time. -->
       <plugin>
         <groupId>io.smallrye</groupId>
         <artifactId>jandex-maven-plugin</artifactId>

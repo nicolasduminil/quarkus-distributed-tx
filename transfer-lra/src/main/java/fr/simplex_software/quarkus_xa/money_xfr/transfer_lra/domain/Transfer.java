@@ -6,15 +6,6 @@ import jakarta.persistence.*;
 import java.math.*;
 import java.time.*;
 
-/**
- * The saga's own record of a transfer.
- * <p>
- * Two things distinguish it from the XA module's entity: it carries the id of the
- * LRA that produced it, and its status is a lifecycle rather than a constant. A
- * 2PC transfer is only ever COMPLETED — a rollback erases the row. A saga
- * transfer starts PENDING and ends either COMPLETED or COMPENSATED, because
- * "we tried and undid it" is a real outcome that has to be recorded somewhere.
- */
 @Entity
 @Table(name = "XFERS")
 public class Transfer

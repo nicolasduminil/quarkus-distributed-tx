@@ -19,16 +19,6 @@ import java.math.*;
 import java.time.*;
 import java.util.*;
 
-/**
- * Orchestrates the transfer as a saga.
- * <p>
- * Contrast with the XA service: there, one {@code @Transactional} method mutated
- * two databases and Narayana made them agree. Here there is no shared
- * transaction at all — this service owns only the transfer log, and the money
- * itself is moved by a remote service that it can only ask, never command.
- * Consistency comes from the coordinator driving every participant to the same
- * outcome afterwards.
- */
 @ApplicationScoped
 public class TransferSagaService
 {
@@ -38,13 +28,6 @@ public class TransferSagaService
   @RestClient
   AccountLraClient accountClient;
 
-  /**
-   * Runs inside an already-started LRA. Note the ordering: the transfer row is
-   * committed <em>before</em> the remote calls, so that if this service dies
-   * mid-saga the coordinator's later {@code @Compensate} still finds something to
-   * mark. Note also what is <em>not</em> done — no JTA transaction is held open
-   * across the network calls.
-   */
   public TransferDto processTransfer(String lraId, TransferRequest request)
   {
     if (request.getAmount() == null || request.getAmount().compareTo(BigDecimal.ZERO) <= 0)
@@ -66,8 +49,6 @@ public class TransferSagaService
     }
     catch (WebApplicationException wae)
     {
-      // Throwing here makes the LRA filter cancel the saga, which drives
-      // @Compensate on this service and on every account already reserved.
       throw RemoteAccountException.from(wae);
     }
     return transfer.toDto();
@@ -82,11 +63,6 @@ public class TransferSagaService
     return ParticipantStatus.Completed;
   }
 
-  /**
-   * The saga's record of its own undoing. There is no money to move back — the
-   * account service only ever held reservations — so this just marks the attempt
-   * as compensated, which is precisely the audit trail a 2PC rollback cannot give.
-   */
   @Transactional
   public ParticipantStatus compensate(String lraId)
   {

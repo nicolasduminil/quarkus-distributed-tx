@@ -9,14 +9,6 @@ import jakarta.inject.*;
 
 import java.math.*;
 
-/**
- * The shared transfer contract, run against the XA/2PC implementation.
- * <p>
- * Because this service <em>is</em> the resource manager for both databases, it can
- * observe balances by injecting the repositories directly. The LRA counterpart
- * cannot — that difference is the whole point, and it is why the contract leaves
- * these probes abstract.
- */
 @QuarkusTest
 public class MoneyTransferIT extends AbstractMoneyTransferContractIT
 {
@@ -44,10 +36,6 @@ public class MoneyTransferIT extends AbstractMoneyTransferContractIT
       .call(() -> accountRepository.getAccount(accountId).orElseThrow().getBalance());
   }
 
-  /**
-   * Under 2PC a rolled-back transfer leaves no row behind, so every row that
-   * exists is by construction a completed one.
-   */
   @Override
   protected int completedTransferCount()
   {

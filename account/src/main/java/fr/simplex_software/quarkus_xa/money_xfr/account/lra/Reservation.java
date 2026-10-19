@@ -4,17 +4,6 @@ import jakarta.persistence.*;
 
 import java.math.*;
 
-/**
- * A hold placed on an account for the duration of a saga.
- * <p>
- * This is what makes compensation correct rather than merely plausible. A naive
- * saga debits immediately and credits the money back if anything fails; that is
- * wrong twice over — the balance visibly dips and recovers (a dirty read for any
- * concurrent observer), and the compensating credit can itself fail, leaving the
- * saga stuck. Here the balance is never touched until {@code @Complete}: a debit
- * only records a PENDING reservation, and compensation simply releases it, so
- * there is literally nothing to undo.
- */
 @Entity
 @Table(name = "RESERVATIONS",
   uniqueConstraints = @UniqueConstraint(name = "UK_RESERVATION_LRA",
@@ -51,8 +40,7 @@ public class Reservation
     this.state = ReservationState.PENDING;
   }
 
-  /** The signed effect this reservation will have once confirmed. */
-  public BigDecimal signedAmount()
+   public BigDecimal signedAmount()
   {
     return type == ReservationType.DEBIT ? amount.negate() : amount;
   }

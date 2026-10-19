@@ -7,11 +7,6 @@ import jakarta.enterprise.context.*;
 
 import java.util.*;
 
-/**
- * Single Panache implementation — unlike the XA module there is no in-memory
- * alternative here, because a saga participant has to survive a restart to answer
- * the coordinator's retries.
- */
 @ApplicationScoped
 public class TransferRepository implements PanacheRepositoryBase<Transfer, String>
 {

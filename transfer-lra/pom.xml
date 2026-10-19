@@ -15,9 +15,6 @@
       <groupId>fr.simplex-software.workshop</groupId>
       <artifactId>common</artifactId>
     </dependency>
-    <!-- Note what is NOT here: account-repository. This service has no access to
-         the accounts database and must go through the account service's API. That
-         absence is the architectural difference from the XA module. -->
     <dependency>
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-narayana-lra</artifactId>
@@ -43,10 +40,6 @@
       <artifactId>transfer-tck</artifactId>
       <scope>test</scope>
     </dependency>
-    <!-- TEST SCOPE ONLY. The saga needs a real counterparty to talk to over HTTP,
-         and the account service is it. Keeping this out of the main scope is what
-         preserves the architecture: at runtime this service has no access to the
-         accounts database, only to the account service's API. -->
     <dependency>
       <groupId>fr.simplex-software.workshop</groupId>
       <artifactId>account</artifactId>

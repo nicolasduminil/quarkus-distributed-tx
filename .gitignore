@@ -8,5 +8,11 @@ target/
 *.iml
 *.ipr
 
+# Internal working files, not published
 tasks
 CLAUDE.md
+.claude/
+
+# Published in a separate repository
+article.md
+article-requirements.md

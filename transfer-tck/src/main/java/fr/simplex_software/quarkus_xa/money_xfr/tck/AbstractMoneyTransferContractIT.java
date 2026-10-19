@@ -3,86 +3,39 @@ package fr.simplex_software.quarkus_xa.money_xfr.tck;
 import fr.simplex_software.quarkus_xa.money_xfr.common.domain.*;
 import io.restassured.http.*;
 import jakarta.ws.rs.core.Response.*;
+import org.awaitility.core.*;
 import org.junit.jupiter.api.*;
 
 import java.math.*;
+import java.time.*;
 
 import static io.restassured.RestAssured.*;
 import static org.assertj.core.api.Assertions.*;
+// Imported by name rather than with a wildcard: Awaitility also declares given(),
+// which would collide with RestAssured's.
+import static org.awaitility.Awaitility.await;
 
-/**
- * The REST contract that <em>both</em> transfer implementations must satisfy — the
- * XA/2PC one and the LRA/saga one. Keeping it in one place is what makes the
- * comparison between them meaningful: if a scenario passes here against both
- * stacks, the two are functionally equivalent and differ only in how they get
- * there.
- * <p>
- * Two deliberate design choices:
- * <ul>
- *   <li><b>Assertions are on deltas, not absolute balances.</b> The two stacks seed
- *       different accounts with different opening balances, so the contract reads
- *       the balance first and asserts how it moved.</li>
- *   <li><b>The probes are abstract.</b> The XA service owns the accounts datasource
- *       and reads balances straight from it; the LRA service has no such access
- *       <em>by design</em> and must ask the account service over HTTP. The
- *       scenarios are shared, the observation mechanism is not.</li>
- * </ul>
- */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public abstract class AbstractMoneyTransferContractIT
 {
   protected static final BigDecimal AMOUNT = new BigDecimal("150.24");
+  private static final Duration SETTLE_TIMEOUT = Duration.ofSeconds(5);
+  private static final Duration POLL_INTERVAL = Duration.ofMillis(100);
 
-  /** An account with at least {@link #AMOUNT} available. */
   protected abstract String sourceAccount();
 
   protected abstract String destinationAccount();
 
-  /** Reads the settled balance, however this stack is able to observe it. */
   protected abstract BigDecimal balanceOf(String accountId);
 
-  /**
-   * How many transfers actually went through.
-   * <p>
-   * Deliberately <em>completed</em> transfers rather than all rows. A 2PC
-   * rollback leaves no trace at all, whereas a cancelled saga records that it
-   * undid itself — a COMPENSATED row is the honest outcome, not a failure. Counting
-   * only completed transfers lets one contract hold for both without pretending
-   * that difference away.
-   */
   protected abstract int completedTransferCount();
 
-  /**
-   * XA commits before the response is written, so its effects are visible
-   * immediately. A saga only closes once the coordinator has driven every
-   * participant's completion, which may land just after the response. Polling
-   * keeps one contract honest for both rather than baking a race into it.
-   */
-  protected void eventually(Runnable assertion)
+  protected void eventually(ThrowingRunnable assertion)
   {
-    AssertionError last = null;
-    for (int attempt = 0; attempt < 50; attempt++)
-    {
-      try
-      {
-        assertion.run();
-        return;
-      }
-      catch (AssertionError ae)
-      {
-        last = ae;
-        try
-        {
-          Thread.sleep(100);
-        }
-        catch (InterruptedException ie)
-        {
-          Thread.currentThread().interrupt();
-          throw ae;
-        }
-      }
-    }
-    throw last;
+    await().atMost(SETTLE_TIMEOUT)
+      .pollDelay(Duration.ZERO)
+      .pollInterval(POLL_INTERVAL)
+      .untilAsserted(assertion);
   }
 
   private String postTransfer(String source, String destination, BigDecimal amount, Status expected)
@@ -94,12 +47,6 @@ public abstract class AbstractMoneyTransferContractIT
       .extract().body().asString();
   }
 
-  /**
-   * Asserts the caller is told <em>why</em> the transfer failed, not merely that it
-   * did. Worth pinning: a saga has machinery of its own that will happily replace a
-   * business error with its own plumbing message if the LRA is mishandled, and a
-   * status-code-only assertion never notices.
-   */
   private void assertBusinessError(String body)
   {
     assertThat(body)
@@ -109,10 +56,6 @@ public abstract class AbstractMoneyTransferContractIT
       .doesNotContainIgnoringCase("CancelFailed");
   }
 
-  /**
-   * Picks a COMPLETED transfer rather than simply the first one: the saga stack's
-   * listing may also contain COMPENSATED rows, and their order is unspecified.
-   */
   private String aCompletedTransferId()
   {
     return given().accept(ContentType.JSON)
@@ -151,8 +94,6 @@ public abstract class AbstractMoneyTransferContractIT
     assertBusinessError(postTransfer(sourceAccount(), destinationAccount(),
       sourceBefore.add(new BigDecimal("1000000.00")), Status.BAD_REQUEST));
 
-    // XA rolled both datasources back; the saga released its reservations. The
-    // mechanisms differ completely, the observable outcome must not.
     eventually(() ->
     {
       assertThat(balanceOf(sourceAccount())).isEqualByComparingTo(sourceBefore);

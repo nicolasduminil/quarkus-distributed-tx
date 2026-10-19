@@ -23,14 +23,6 @@ public class TransferService
   @Inject
   TransferRepository transferRepository;
 
-  /**
-   * Moves money from the source to the destination account and records the
-   * transfer. The debit/credit hit the {@code accounts} XA datasource while the
-   * {@link Transfer} row is written to the {@code xfers} XA datasource. Both
-   * participate in the single JTA transaction started here, so Narayana drives a
-   * two-phase commit across the two databases: either everything commits or, on
-   * any failure (e.g. insufficient funds), everything rolls back.
-   */
   @Transactional
   public TransferDto processTransfer(TransferRequest request)
   {

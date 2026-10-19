@@ -16,16 +16,6 @@ import org.eclipse.microprofile.openapi.annotations.tags.*;
 import java.net.*;
 import java.util.*;
 
-/**
- * The saga counterpart of the XA transfer resource. It exposes exactly the same
- * {@code /xfers} contract, so the shared TCK can be pointed at either one.
- * <p>
- * The single annotation that changes everything is {@code @LRA(REQUIRED)} on the
- * POST: it starts a Long Running Action, and because the default is
- * {@code end = true}, the LRA closes when the method returns — successfully,
- * which drives {@code @Complete} on every participant, or exceptionally, which
- * drives {@code @Compensate}.
- */
 @ApplicationScoped
 @Path("/xfers")
 @Produces(MediaType.APPLICATION_JSON)

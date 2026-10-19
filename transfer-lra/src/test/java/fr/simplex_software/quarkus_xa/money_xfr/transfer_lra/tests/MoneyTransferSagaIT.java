@@ -11,14 +11,6 @@ import java.math.*;
 import static io.restassured.RestAssured.*;
 import static org.assertj.core.api.Assertions.*;
 
-/**
- * The shared transfer contract, run against the LRA/saga implementation.
- * <p>
- * The probes are the interesting part. Where the XA test injects the repositories
- * and reads the databases directly, this one can only ask over HTTP — because
- * that is genuinely all a saga orchestrator has. The same scenarios pass either
- * way, which is the point: the two stacks are functionally equivalent.
- */
 @QuarkusTest
 public class MoneyTransferSagaIT extends AbstractMoneyTransferContractIT
 {
@@ -54,12 +46,6 @@ public class MoneyTransferSagaIT extends AbstractMoneyTransferContractIT
       .size();
   }
 
-  /**
-   * Saga-specific, and the reason the whole exercise is worth doing: a cancelled
-   * saga does not vanish the way a 2PC rollback does. It leaves a COMPENSATED
-   * record saying "this was attempted and undone" — an audit trail XA cannot
-   * produce, because a rolled-back transaction leaves no rows at all.
-   */
   @Test
   @Order(60)
   public void cancelledSagaShouldLeaveACompensatedRecord()
@@ -73,12 +59,6 @@ public class MoneyTransferSagaIT extends AbstractMoneyTransferContractIT
     eventually(() -> assertThat(compensatedTransferCount()).isPositive());
   }
 
-  /**
-   * The other half of the contrast: a hold is observable while the saga is in
-   * flight. Under XA there is no such window — nothing is visible until commit.
-   * Here we only assert the mechanism exists and nets out to zero once the saga
-   * closes, which is what makes the reserve-then-confirm model safe.
-   */
   @Test
   @Order(70)
   public void settledSagaShouldLeaveNoHoldsBehind()
@@ -96,6 +76,15 @@ public class MoneyTransferSagaIT extends AbstractMoneyTransferContractIT
       .when().get("/lra/accounts/{id}/availability", sourceAccount())
       .then().statusCode(200)
       .body("available", org.hamcrest.Matchers.notNullValue());
+  }
+
+  @Test
+  @Order(80)
+  public void statusOfAnUnknownLraShouldBe404()
+  {
+    given().header("Long-Running-Action", "http://localhost:50000/lra-coordinator/no-such-lra")
+      .when().get("/lra/accounts/status")
+      .then().statusCode(404);
   }
 
   private int compensatedTransferCount()

@@ -6,11 +6,6 @@ import jakarta.enterprise.inject.*;
 
 import java.util.*;
 
-/**
- * JPA/Panache implementation over the {@code accounts} XA datasource. Enlisting
- * this datasource in the caller's JTA transaction is what lets Narayana run a
- * two-phase commit across the accounts and xfers databases.
- */
 @ApplicationScoped
 @Alternative
 public class AccountRepositoryXA implements PanacheRepositoryBase<Account, String>, AccountRepository

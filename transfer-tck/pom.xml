@@ -10,10 +10,6 @@
   </parent>
   <artifactId>transfer-tck</artifactId>
   <name>Quarkus Distributed TX :: the shared transfer contract</name>
-  <!-- Test-support library, not an application: it holds the REST contract that
-       BOTH the XA and the LRA transfer services must satisfy. The test tooling is
-       at compile scope so consumers can simply depend on this module with
-       <scope>test</scope> instead of dealing with test-jar plumbing. -->
   <dependencies>
     <dependency>
       <groupId>fr.simplex-software.workshop</groupId>
@@ -31,6 +27,10 @@
       <groupId>org.assertj</groupId>
       <artifactId>assertj-core</artifactId>
       <version>3.26.3</version>
+    </dependency>
+    <dependency>
+      <groupId>org.awaitility</groupId>
+      <artifactId>awaitility</artifactId>
     </dependency>
   </dependencies>
   <build>
