@@ -12,6 +12,7 @@ target/
 tasks
 CLAUDE.md
 .claude/
+claude-resume.txt
 
 # Published in a separate repository
 article.md
