@@ -1,20 +1,23 @@
-# Quarkus Distributed TX — the same money transfer, twice
+# Quarkus Distributed TX — the same money transfer, three times
 
-A Quarkus workshop that implements one money-transfer use case **two ways**, so the
-two dominant answers to distributed consistency can be compared side by side on
+A Quarkus workshop that implements one money-transfer use case **three ways**, so the
+dominant answers to distributed consistency can be compared side by side on
 identical code:
 
 - **XA / 2PC** (`transfer`, port 8080) — a genuine two-phase commit across two XA
   datasources, coordinated by Narayana.
 - **Saga / MicroProfile LRA** (`transfer-lra`, port 8090) — compensation-based
   consistency across autonomous services, coordinated by a Narayana LRA coordinator.
+- **Chained Kafka and JTA transactions** (`transfer-kafka`, port 8095) — a listener
+  whose Kafka transaction carries the consumed offset, wrapped around a database
+  transaction, with **no coordinator between the two**.
 
-Both expose the **same `/xfers` REST contract** and are driven by the **same shared
-test suite** (`transfer-tck`), so any difference you observe is a difference in
-transaction strategy and nothing else.
+All three expose the **same `/xfers` REST contract** and are driven by the **same
+shared test suite** (`transfer-tck`), so any difference you observe is a difference
+in transaction strategy and nothing else.
 
-> **Status.** Both stacks are complete and fully tested — `mvn clean verify` runs
-> 18 integration tests across the two implementations, none skipped.
+> **Status.** All three stacks are complete and fully tested — `mvn clean verify`
+> runs 27 integration tests across the three implementations, none skipped.
 
 ## Architecture
 
@@ -139,6 +142,44 @@ That fourth row is why the shared contract counts *completed* transfers rather
 than all rows: "we tried and undid it" is a real saga outcome, not a failure to
 paper over.
 
+## How close Kafka gets
+
+Apache Kafka exposes no `XAResource`, so no transaction manager can enlist it
+alongside a datasource. What a Kafka transaction *can* do is commit the **consumer
+offsets** together with the produced records, and that is enough to get most of
+the way there. `transfer-kafka` consumes a `TransferRequest`, moves the money,
+publishes the outcome and commits all of it at once:
+
+```java
+return emitter.withTransactionAndAck(message, tx ->
+{
+  apply(requestId, message.getPayload()).ifPresent(tx::send);
+  return Uni.createFrom().voidItem();
+});
+```
+
+The Kafka transaction is the **outer** one, so it owns the offsets; the database
+transaction is the inner one. Abort the outer transaction and the consumer position
+resets to the last committed offset, so the broker **delivers the message again** —
+which, paired with a rolled-back database, puts both resources back where they were.
+
+| Outcome | Database | Broker | Deliveries |
+|---|---|---|---|
+| Transfer succeeds | Committed | Event visible to a `read_committed` reader | 1 |
+| Business rejection | `REJECTED` row, balances untouched | Rejection event published | 1 |
+| Failure between the commits | Rolled back | Transaction aborted, nothing visible | 2 |
+
+The middle row is a deliberate choice: a business rejection is an **outcome**, not a
+transaction failure, so it commits and lets the offset advance. Aborting there would
+return a message whose next delivery would be refused for the same reason, for ever.
+
+What remains is the gap this variant is named for. A process that dies between the
+database commit and the Kafka commit leaves an applied transfer whose message comes
+back, which the `PROCESSED_REQUESTS` ledger absorbs — the replay finds its own row
+and does nothing. Upstream [KIP-939](https://issues.apache.org/jira/browse/KAFKA-15370)
+adds a prepare/commit handshake to Kafka, which would turn this chaining into
+genuine coordination; it has not shipped.
+
 ## Why not XA over REST?
 
 An earlier iteration had the transfer service call the account service's
@@ -162,11 +203,13 @@ cost of trading atomicity for eventual consistency with compensations.
 | Module               | Role                                                                                                                                                                           |
 |----------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `common`             | Shared library: `Common` utility, the transfer DTOs (`TransferDto`, `TransferRequest`, `TransferResponse`, `TransferStatus`), the application exception hierarchy and the single `ApplicationExceptionMapper` that maps them to HTTP status codes. |
-| `account-repository` | Shared persistence layer for accounts: the `Account` entity, `AccountDto`, the `AccountRepository` interface and its two implementations. Depended on by `account` and by `transfer` — and pointedly **not** by `transfer-lra`. |
-| `transfer-tck`       | The REST contract both transfer implementations must satisfy, as an abstract test class. Test tooling is at compile scope so consumers depend on it with `<scope>test</scope>`.   |
+| `account-repository` | Shared persistence layer for accounts: the `Account` entity, `AccountDto`, the `AccountRepository` interface and its two implementations. Depended on by `account`, `transfer` and `transfer-kafka` — and pointedly **not** by `transfer-lra`. |
+| `transfer-core`      | Shared transfer layer for the two co-located implementations: the `Transfer` entity, the `TransferRepository` interface and its two implementations, `TransferService`, and the `/xfers` JAX-RS resource. Used by `transfer` and `transfer-kafka`, so the REST contract they expose is literally the same class rather than two copies of it. |
+| `transfer-tck`       | The REST contract all three transfer implementations must satisfy, as an abstract test class. Test tooling is at compile scope so consumers depend on it with `<scope>test</scope>`.   |
 | `account`            | Account microservice (port 8081). Owns the `accounts` schema. CRUD + debit/credit, **plus** the LRA participant endpoints under `/lra/accounts`.                                  |
-| `transfer`           | XA coordinator (port 8080). Two XA datasources (`accounts`, `xfers`). Transfer CRUD plus the 2PC transfer operation.                                                             |
+| `transfer`           | XA coordinator (port 8080). Two XA datasources (`accounts`, `xfers`). Carries **no Java of its own**: once the domain lives in `transfer-core`, the XA implementation is configuration, and that is the whole point of it.          |
 | `transfer-lra`       | Saga orchestrator (port 8090). One plain datasource for its own transfer log; reaches balances only through the account service's API.                                           |
+| `transfer-kafka`     | Kafka listener (port 8095). The same two XA datasources and the same `/xfers` resource as `transfer`, plus the classes that are about Kafka: the listener, the `read_committed` observer, the `TransferEvent` payload and the `PROCESSED_REQUESTS` ledger. Demonstration endpoints under `/kafka`. |
 
 Each repository has two implementations: an in-memory one (`DefaultAccountRepository`,
 `DefaultTransferRepository`) and a JPA/Panache one (`AccountRepositoryXA`,
@@ -175,8 +218,16 @@ each application picks the XA pair explicitly through
 `quarkus.arc.selected-alternatives`. Only the XA implementations participate in 2PC —
 the in-memory ones are there to run the services without a database.
 
-All four modules carry the Jandex plugin so their `@Entity`, `@Provider` and CDI bean
-classes are indexed when consumed as external dependencies.
+`transfer-lra` keeps its **own** `Transfer`, repository and resource rather than reusing
+`transfer-core`. That is deliberate: its entity carries an `LRA_ID` column, its repository
+answers `findByLra`, and its resource is annotated with `@LRA`. Sharing a transfer layer
+with the co-located stacks would cost the saga module the independence it exists to
+demonstrate — the same reason it does not depend on `account-repository` either.
+
+Every library module (`common`, `account-repository`, `transfer-core`, `transfer-tck`)
+carries the Jandex plugin so its `@Entity`, `@Provider` and CDI bean classes are indexed
+when consumed as an external dependency. `transfer` relies on this completely, since all
+of its beans arrive that way.
 
 ## Endpoints
 
@@ -189,6 +240,14 @@ Transfer service (`http://localhost:8080`, Swagger UI at `/q/swagger-ui`):
 
 - `POST /xfers` — perform a transfer (`{sourceAccountId, destinationAccountId, amount, currency}`)
 - `GET /xfers`, `GET /xfers/{transferId}`, `PUT /xfers/{transferId}`, `DELETE /xfers/{transferId}`
+
+Kafka transfer service (`http://localhost:8095`, Swagger UI at `/q/swagger-ui`): the
+same `/xfers` contract, plus the endpoints that drive and observe the listener:
+
+- `POST /kafka/requests?requestId=…` — put a transfer request on the `transfer-requests` topic
+- `GET /kafka/events` — what a consumer with `isolation.level=read_committed` has received
+- `GET /kafka/deliveries` — how many times each request reached the listener
+- `POST /kafka/fail-once/{requestId}` — make the next delivery fail between the two commits
 
 ## Build & test
 
@@ -212,6 +271,12 @@ mvn clean verify
 - `MoneyTransferIT` (transfer): the contract against XA, with repository-based probes.
 - `MoneyTransferSagaIT` (transfer-lra): the contract against LRA, with HTTP probes,
   plus saga-only assertions about the `COMPENSATED` audit row and released reservations.
+- `MoneyTransferKafkaIT` (transfer-kafka): the contract against the chained-transaction
+  stack, with repository-based probes, proving it honours the same REST surface.
+- `TransferKafkaTransactionIT` (transfer-kafka): the four transaction outcomes. The
+  rollback case asserts **two deliveries and one movement**, which proves the first
+  attempt left both the database and the broker untouched without depending on
+  observing an intermediate state.
 - `AccountResourceIT` (account): account CRUD, debit/credit, 404 on unknown account,
   and rejection of overdrafts and invalid amounts. Unchanged by the LRA work, which
   is how we know the participant endpoints were added additively.
@@ -282,6 +347,9 @@ docker compose up -d
 | `account` | 8081 | CRUD + LRA participant |
 | `transfer` | 8080 | XA/2PC |
 | `transfer-lra` | 8090 | Saga/LRA |
+| `xfers-kafka-db` | 5435 | Kafka transfer log, `max_prepared_transactions=100` |
+| `kafka` | 9092 | `apache/kafka` in KRaft mode, single broker |
+| `transfer-kafka` | 8095 | Chained Kafka and JTA transactions |
 
 Both transfer services run against the same accounts, so you can drive the same
 transfer through each and compare:
@@ -291,6 +359,12 @@ BODY='{"sourceAccountId":"ACC1","destinationAccountId":"ACC2","amount":10.00,"cu
 curl -s -XPOST -H 'Content-Type: application/json' -d "$BODY" http://localhost:8080/xfers  # XA
 curl -s -XPOST -H 'Content-Type: application/json' -d "$BODY" http://localhost:8090/xfers  # Saga
 curl -s http://localhost:8081/lra/accounts/ACC1/availability                                # reservations
+
+# The Kafka variant is driven through its topic rather than synchronously
+curl -s -XPOST -H 'Content-Type: application/json' -d "$BODY" \
+  'http://localhost:8095/kafka/requests?requestId=demo-1'
+curl -s http://localhost:8095/kafka/events
+curl -s http://localhost:8095/kafka/deliveries
 ```
 
 Note `QUARKUS_LRA_BASE_URI` on the two participants: it is the address the
@@ -306,3 +380,12 @@ that is only meaningful from its own side of the network.
   recovery manager so in-doubt transactions are resolved after a crash.
 - `AccountRestClient` in the `account` module is a leftover from the REST-based
   iteration described above and is no longer wired to anything.
+- A single-broker Kafka needs `KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1` and
+  `KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1`. Both default to 3, which one broker cannot
+  satisfy, and a transactional producer then fails to initialise.
+- Dev Services for Kafka defaults to Redpanda, whose transactions
+  [do not support exactly-once processing](https://quarkus.io/guides/kafka-dev-services/).
+  `transfer-kafka` therefore pins `quarkus.kafka.devservices.provider=strimzi` so the
+  behaviour under test comes from the architecture rather than from the broker.
+- The Kafka listener keeps `commit-strategy=ignore` and `failure-strategy=ignore`,
+  because the Kafka transaction owns the offset commits.

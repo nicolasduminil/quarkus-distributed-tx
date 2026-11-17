@@ -17,6 +17,7 @@ set -uo pipefail
 ACCOUNT_URL="${ACCOUNT_URL:-http://localhost:8081}"
 XA_URL="${XA_URL:-http://localhost:8080}"
 SAGA_URL="${SAGA_URL:-http://localhost:8090}"
+KAFKA_URL="${KAFKA_URL:-http://localhost:8095}"
 COORDINATOR_URL="${COORDINATOR_URL:-http://localhost:50000/lra-coordinator}"
 PARTICIPANT_COORDINATOR_URL="${PARTICIPANT_COORDINATOR_URL:-http://lra-coordinator:8080/lra-coordinator}"
 
@@ -100,6 +101,16 @@ wait_until() {
 
 balance_moved() { awk -v a="$(balance_of "$1")" -v b="$2" 'BEGIN { exit !(a + 0 != b + 0) }'; }
 held_is()       { awk -v a="$(held_of "$1")"    -v b="$2" 'BEGIN { exit !(a + 0 == b + 0) }'; }
+
+kafka_event_status() {
+  curl -sS "$KAFKA_URL/kafka/events" \
+    | jq -r --arg id "$1" 'map(select(.requestId == $id)) | .[0].status // "none"'
+}
+kafka_deliveries() {
+  curl -sS "$KAFKA_URL/kafka/deliveries" | jq -r --arg id "$1" '.[$id] // 0'
+}
+deliveries_are() { [[ $(kafka_deliveries "$1") == "$2" ]]; }
+event_status_is() { [[ $(kafka_event_status "$1") == "$2" ]]; }
 
 transfer_status() { curl -sS "$SAGA_URL/xfers/$1" | jq -r '.status'; }
 status_is()       { [[ $(transfer_status "$1") == "$2" ]]; }
@@ -386,6 +397,67 @@ else
     expect_delta "$SRC" "$SRC_BEFORE" 0
     expect_held_delta "$SRC" "$HELD_BEFORE" 0
   fi
+fi
+
+# --------------------------------------------------------------------------
+section "Kafka Transfer API (chained transactions) - $KAFKA_URL/kafka"
+# --------------------------------------------------------------------------
+if ! up "$KAFKA_URL/kafka/events"; then
+  note "Kafka transfer service unreachable on $KAFKA_URL - skipping this section"
+else
+  REQ_OK="req-ok-$$"
+  SRC_BEFORE=$(balance_of "$SRC")
+  DST_BEFORE=$(balance_of "$DST")
+
+  call 202 "POST /kafka/requests ($SRC -> $DST, 30.00)" -X POST -H "$JSON" \
+    -d "{\"sourceAccountId\":\"$SRC\",\"destinationAccountId\":\"$DST\",\"amount\":30.00,\"currency\":\"EUR\"}" \
+    "$KAFKA_URL/kafka/requests?requestId=$REQ_OK"
+
+  wait_until 40 balance_moved "$SRC" "$SRC_BEFORE"
+  expect_delta "$SRC" "$SRC_BEFORE" -30.00
+  expect_delta "$DST" "$DST_BEFORE" 30.00
+  wait_until 20 event_status_is "$REQ_OK" COMPLETED
+  event_status_is "$REQ_OK" COMPLETED \
+    && pass "a read_committed reader received the COMPLETED event" \
+    || fail "event status is $(kafka_event_status "$REQ_OK"), expected COMPLETED"
+  deliveries_are "$REQ_OK" 1 \
+    && pass "the committed message was delivered once" \
+    || fail "delivered $(kafka_deliveries "$REQ_OK") times, expected 1"
+
+  section "Kafka Transfer API - a failure between the two commits"
+  REQ_KO="req-ko-$$"
+  call 204 "POST /kafka/fail-once/$REQ_KO (arm one failure)" -X POST \
+    "$KAFKA_URL/kafka/fail-once/$REQ_KO"
+
+  SRC_BEFORE=$(balance_of "$SRC")
+  DST_BEFORE=$(balance_of "$DST")
+  call 202 "POST /kafka/requests (the first delivery will roll back)" -X POST -H "$JSON" \
+    -d "{\"sourceAccountId\":\"$SRC\",\"destinationAccountId\":\"$DST\",\"amount\":30.00,\"currency\":\"EUR\"}" \
+    "$KAFKA_URL/kafka/requests?requestId=$REQ_KO"
+
+  wait_until 60 deliveries_are "$REQ_KO" 2
+  deliveries_are "$REQ_KO" 2 \
+    && pass "the aborted transaction brought the message back (2 deliveries)" \
+    || fail "delivered $(kafka_deliveries "$REQ_KO") times, expected 2"
+  # Two deliveries and one movement: the first attempt left both resources alone.
+  expect_delta "$SRC" "$SRC_BEFORE" -30.00
+  expect_delta "$DST" "$DST_BEFORE" 30.00
+
+  section "Kafka Transfer API - a business rejection is an outcome, not a rollback"
+  REQ_REJ="req-rej-$$"
+  SRC_BEFORE=$(balance_of "$SRC")
+  call 202 "POST /kafka/requests (insufficient funds)" -X POST -H "$JSON" \
+    -d "{\"sourceAccountId\":\"$SRC\",\"destinationAccountId\":\"$DST\",\"amount\":999999.00,\"currency\":\"EUR\"}" \
+    "$KAFKA_URL/kafka/requests?requestId=$REQ_REJ"
+
+  wait_until 40 event_status_is "$REQ_REJ" REJECTED
+  event_status_is "$REQ_REJ" REJECTED \
+    && pass "the rejection was published as a committed outcome" \
+    || fail "event status is $(kafka_event_status "$REQ_REJ"), expected REJECTED"
+  expect_delta "$SRC" "$SRC_BEFORE" 0
+  deliveries_are "$REQ_REJ" 1 \
+    && pass "the offset advanced, so the refused message stayed down" \
+    || fail "delivered $(kafka_deliveries "$REQ_REJ") times, expected 1"
 fi
 
 # --------------------------------------------------------------------------
