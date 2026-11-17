@@ -1,0 +1,18 @@
+@startuml
+title the committing path, a transfer request applied once
+participant "Broker" as B
+participant "TransferRequestListener" as L
+participant "PostgreSQL" as D
+participant "Transaction coordinator" as C
+
+B -> L : deliver the transfer request
+L -> C : begin the Kafka transaction
+L -> D : begin a JTA transaction
+L -> D : debit, credit, write the transfer row and the ledger row
+L -> D : commit the JTA transaction
+D --> L : the database changes are durable
+L -> C : send the outcome event
+L -> C : commit the Kafka transaction, carrying the consumed offset
+C -> C : PREPARE_COMMIT, then the markers, then COMMITTED
+C --> L : the consumer position has advanced
+@enduml

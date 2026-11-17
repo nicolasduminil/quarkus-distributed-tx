@@ -1,0 +1,22 @@
+@startuml
+title the rolling back path, an aborted transaction and its redelivery
+participant "Broker" as B
+participant "TransferRequestListener" as L
+participant "PostgreSQL" as D
+participant "Transaction coordinator" as C
+participant "__consumer_offsets" as O
+
+B -> L : deliver the transfer request
+L -> C : begin the Kafka transaction
+L -> D : begin a JTA transaction
+L -> D : debit, credit, write both rows
+L -> L : a failure is thrown inside the JTA transaction
+L -> D : Narayana rolls the database back
+D --> L : the balances are as they were before
+L -> C : abort the Kafka transaction
+C -> C : PREPARE_ABORT, then the abort markers, then ABORTED
+C -> O : the offsets written to __consumer_offsets are discarded
+B -> L : deliver the same request a second time
+L -> D : the second attempt completes and commits
+L -> C : commit the Kafka transaction
+@enduml

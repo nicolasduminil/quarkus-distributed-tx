@@ -1,0 +1,17 @@
+@startuml
+title the residual window, a redelivery absorbed by the ledger
+participant "Broker" as B
+participant "TransferRequestListener" as L
+participant "PostgreSQL" as D
+participant "Transaction coordinator" as C
+
+L -> D : commit the JTA transaction
+D --> L : the transfer row and the ledger row are durable
+note over L : the process terminates here, while the\nKafka transaction remains undecided
+C -> C : abort the undecided transaction
+C -> C : leave the consumed offset uncommitted
+B -> L : deliver the same request after the restart
+L -> D : consult the PROCESSED_REQUESTS ledger
+D --> L : the request identifier is already recorded
+L -> C : commit the Kafka transaction, applying no further change
+@enduml

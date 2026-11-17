@@ -1,0 +1,23 @@
+@startuml
+title a Kafka transaction, from initialisation to commit
+participant "Producer" as P
+participant "Transaction coordinator" as C
+participant "Partition leaders" as L
+participant "__consumer_offsets" as O
+
+P -> C : InitProducerId
+C -> C : increment the epoch of this transactional.id
+C --> P : the producer id and the new epoch
+P -> C : AddPartitionsToTxn
+C -> C : log each partition joining the transaction
+P -> L : Produce, carrying the producer id, the epoch and a sequence number
+P -> C : AddOffsetsToTxn
+C -> C : log the offsets partition of the consumer group
+P -> O : TxnOffsetCommit, the consumed offsets
+P -> C : EndTxn, commit
+C -> C : write PREPARE_COMMIT to the transaction log
+C -> L : WriteTxnMarkers, commit
+C -> O : WriteTxnMarkers, commit
+C -> C : write COMMITTED to the transaction log
+C --> P : the transaction is complete
+@enduml
