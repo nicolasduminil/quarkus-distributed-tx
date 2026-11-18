@@ -2,21 +2,23 @@
 title the rolling back path, an aborted transaction and its redelivery
 participant "Broker" as B
 participant "TransferRequestListener" as L
-participant "PostgreSQL" as D
+participant "accounts database" as A
+participant "xfers database" as X
 participant "Transaction coordinator" as C
 participant "__consumer_offsets" as O
 
 B -> L : deliver the transfer request
 L -> C : begin the Kafka transaction
-L -> D : begin a JTA transaction
-L -> D : debit, credit, write both rows
+L -> L : begin a JTA transaction over both databases
+L -> A : debit the source and credit the destination
+L -> X : write the transfer row and the PROCESSED_REQUESTS row
 L -> L : a failure is thrown inside the JTA transaction
-L -> D : Narayana rolls the database back
-D --> L : the balances are as they were before
+L -> A : Narayana rolls the accounts branch back
+L -> X : Narayana rolls the xfers branch back
 L -> C : abort the Kafka transaction
 C -> C : PREPARE_ABORT, then the abort markers, then ABORTED
-C -> O : the offsets written to __consumer_offsets are discarded
+C -> O : the offsets are discarded
 B -> L : deliver the same request a second time
-L -> D : the second attempt completes and commits
+L -> L : the second attempt completes and commits both branches
 L -> C : commit the Kafka transaction
 @enduml
