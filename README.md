@@ -383,9 +383,12 @@ that is only meaningful from its own side of the network.
 - A single-broker Kafka needs `KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1` and
   `KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1`. Both default to 3, which one broker cannot
   satisfy, and a transactional producer then fails to initialise.
-- Dev Services for Kafka defaults to Redpanda, whose transactions
-  [do not support exactly-once processing](https://quarkus.io/guides/kafka-dev-services/).
-  `transfer-kafka` therefore pins `quarkus.kafka.devservices.provider=strimzi` so the
-  behaviour under test comes from the architecture rather than from the broker.
+- Dev Services for Kafka offers several broker providers. Redpanda transactions
+  [do not support exactly-once processing](https://quarkus.io/guides/kafka-dev-services/),
+  and the same guide records the absence of KIP-447, the transactional commit of
+  consumer offsets on which `transfer-kafka` depends. The module therefore states
+  `quarkus.kafka.devservices.provider=upstream-kafka-native`, which runs a genuine
+  Apache Kafka broker, rather than inheriting a default value that has changed
+  across Quarkus versions.
 - The Kafka listener keeps `commit-strategy=ignore` and `failure-strategy=ignore`,
   because the Kafka transaction owns the offset commits.

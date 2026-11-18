@@ -4,7 +4,7 @@ jobs:
   build-and-test:
     # A machine executor is required: the integration tests use Testcontainers
     # (Quarkus Dev Services) to start the PostgreSQL databases, the LRA
-    # coordinator, a Strimzi Kafka broker and the account service container.
+    # coordinator, an Apache Kafka broker and the account service container.
     machine:
       image: ubuntu-2404:current
     steps:
