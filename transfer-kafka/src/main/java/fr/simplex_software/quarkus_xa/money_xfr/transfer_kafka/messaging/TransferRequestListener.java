@@ -36,8 +36,6 @@ public class TransferRequestListener
   @Channel("transfer-events")
   KafkaTransactions<TransferEvent> emitter;
 
-  // Counted per request so a test can prove that an aborted transaction brought the
-  // same message back. Reached from the Kafka worker threads.
   private final Map<String, AtomicInteger> deliveries = new ConcurrentHashMap<>();
 
   public Map<String, Integer> deliveries()
@@ -68,9 +66,6 @@ public class TransferRequestListener
       }
       catch (RuntimeException runtimeException)
       {
-        // Returning the failure rather than letting it escape keeps the abort inside
-        // Mutiny, where withTransactionAndAck nacks the message and the offset stays
-        // uncommitted, so the broker delivers the record again.
         return Uni.createFrom().failure(runtimeException);
       }
     });

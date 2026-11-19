@@ -89,8 +89,6 @@ public class TransferKafkaTransactionIT
 
     await().atMost(TIMEOUT)
       .untilAsserted(() -> assertThat(listener.deliveriesOf(requestId)).isEqualTo(2));
-    // Two deliveries, yet the money moved once and one event is visible: the first
-    // attempt left both the database and the broker as it found them.
     await().atMost(TIMEOUT).untilAsserted(() ->
     {
       assertThat(balanceOf(SOURCE)).isEqualByComparingTo(sourceBefore.subtract(AMOUNT));
@@ -114,14 +112,10 @@ public class TransferKafkaTransactionIT
     {
       assertThat(eventsOf(requestId)).singleElement()
         .extracting(TransferEvent::status).isEqualTo(TransferStatus.REJECTED);
-      // The event carries the business reason rather than transaction plumbing,
-      // which is the same property the shared contract asserts on error bodies.
       assertThat(eventsOf(requestId).getFirst().reason()).contains("###");
       assertThat(balanceOf(SOURCE)).isEqualByComparingTo(sourceBefore);
       assertThat(balanceOf(DESTINATION)).isEqualByComparingTo(destinationBefore);
     });
-    // A rejection is an outcome, so the offset advanced and the message was not
-    // delivered a second time.
     assertThat(listener.deliveriesOf(requestId)).isEqualTo(1);
   }
 
@@ -139,9 +133,6 @@ public class TransferKafkaTransactionIT
     publish(requestId, AMOUNT);
     await().atMost(TIMEOUT)
       .untilAsserted(() -> assertThat(listener.deliveriesOf(requestId)).isEqualTo(2));
-
-    // The ledger absorbed the replay, which is what renders a redelivered message
-    // whose effect was already applied harmless.
     assertThat(balanceOf(SOURCE)).isEqualByComparingTo(sourceBefore.subtract(AMOUNT));
     assertThat(eventsOf(requestId)).hasSize(1);
   }
