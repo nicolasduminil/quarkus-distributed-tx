@@ -13,12 +13,12 @@ public class FailureInjection
 
   public void armOnce(String requestId)
   {
-    remaining.computeIfAbsent(requestId, key -> new AtomicInteger()).set(1);
+    remaining.put(requestId, new AtomicInteger(1));
   }
 
   public boolean consume(String requestId)
   {
     AtomicInteger counter = remaining.get(requestId);
-    return counter != null && counter.getAndUpdate(current -> current > 0 ? current - 1 : 0) > 0;
+    return counter != null && counter.compareAndSet(1, 0);
   }
 }
