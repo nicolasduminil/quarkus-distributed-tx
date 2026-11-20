@@ -15,8 +15,10 @@ import java.math.*;
 import java.time.*;
 import java.util.*;
 
+import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
+import static org.hamcrest.Matchers.containsString;
 
 @QuarkusTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -135,5 +137,42 @@ public class TransferKafkaTransactionIT
       .untilAsserted(() -> assertThat(listener.deliveriesOf(requestId)).isEqualTo(2));
     assertThat(balanceOf(SOURCE)).isEqualByComparingTo(sourceBefore.subtract(AMOUNT));
     assertThat(eventsOf(requestId)).hasSize(1);
+  }
+
+  @Test
+  @Order(50)
+  public void accountEndpoint_existingAccount_reportsTheSameBalanceAsTheRepository()
+  {
+    BigDecimal reported = new BigDecimal(given().when().get("/kafka/accounts/{id}", SOURCE)
+      .then().statusCode(200).extract().jsonPath().getString("balance"));
+
+    assertThat(reported).isEqualByComparingTo(balanceOf(SOURCE));
+  }
+
+  @Test
+  @Order(60)
+  public void accountEndpoint_unknownAccount_returnsNotFoundCarryingTheReason()
+  {
+    given().when().get("/kafka/accounts/{id}", "ACC-ABSENT")
+      .then().statusCode(404).body(containsString("###"));
+  }
+
+  @Test
+  @Order(70)
+  public void haltOnceEndpoint_armsAnIdentifierConsumedExactlyOnce()
+  {
+    String requestId = "REQ-HALT-ARMING";
+
+    given().when().post("/kafka/halt-once/{id}", requestId).then().statusCode(204);
+
+    assertThat(failureInjection.consumeHalt(requestId)).isTrue();
+    assertThat(failureInjection.consumeHalt(requestId)).isFalse();
+  }
+
+  @Test
+  @Order(80)
+  public void haltArming_identifierNeverArmed_isNotConsumed()
+  {
+    assertThat(failureInjection.consumeHalt("REQ-NEVER-ARMED")).isFalse();
   }
 }

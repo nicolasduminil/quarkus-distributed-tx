@@ -1,7 +1,9 @@
 package fr.simplex_software.quarkus_xa.money_xfr.transfer_kafka.api;
 
+import fr.simplex_software.quarkus_xa.money_xfr.account_repository.*;
 import fr.simplex_software.quarkus_xa.money_xfr.common.*;
 import fr.simplex_software.quarkus_xa.money_xfr.common.domain.*;
+import fr.simplex_software.quarkus_xa.money_xfr.common.exception.*;
 import fr.simplex_software.quarkus_xa.money_xfr.transfer_kafka.messaging.*;
 import io.smallrye.reactive.messaging.kafka.api.*;
 import jakarta.enterprise.context.*;
@@ -27,6 +29,8 @@ public class TransferKafkaResource
   TransferEventObserver observer;
   @Inject
   FailureInjection failureInjection;
+  @Inject
+  AccountRepository accountRepository;
   @Channel("transfer-requests-out")
   Emitter<TransferRequest> requests;
 
@@ -53,6 +57,16 @@ public class TransferKafkaResource
     return Response.ok(observer.received()).build();
   }
 
+  @Operation(summary = "Read an account balance",
+    description = "The balance in the accounts database, as the listener left it")
+  @GET
+  @Path("/accounts/{accountId}")
+  public Response account(@PathParam("accountId") String accountId)
+  {
+    return Response.ok(accountRepository.getAccount(accountId)
+      .orElseThrow(() -> new AccountNotFoundException(accountId)).toDto()).build();
+  }
+
   @Operation(summary = "Read the delivery counts",
     description = "How many times each request has been delivered to the listener")
   @GET
@@ -69,6 +83,17 @@ public class TransferKafkaResource
   public Response failOnce(@PathParam("requestId") String requestId)
   {
     failureInjection.armOnce(requestId);
+    return Response.noContent().build();
+  }
+
+  @Operation(summary = "Arm a halt in the residual window",
+    description = "The next delivery of this request terminates the process after the "
+      + "database commit and before the Kafka commit")
+  @POST
+  @Path("/halt-once/{requestId}")
+  public Response haltOnce(@PathParam("requestId") String requestId)
+  {
+    failureInjection.armHaltOnce(requestId);
     return Response.noContent().build();
   }
 }

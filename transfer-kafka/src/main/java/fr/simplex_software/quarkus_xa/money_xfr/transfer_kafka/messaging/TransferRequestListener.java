@@ -62,6 +62,8 @@ public class TransferRequestListener
       try
       {
         apply(requestId, message.getPayload()).ifPresent(tx::send);
+        if (failureInjection.consumeHalt(requestId))
+          Runtime.getRuntime().halt(1);
         return Uni.createFrom().voidItem();
       }
       catch (RuntimeException runtimeException)
@@ -82,9 +84,6 @@ public class TransferRequestListener
     }
     catch (ApplicationException rejection)
     {
-      // A business rejection is an outcome rather than a transaction failure, so it
-      // commits and allows the offset to advance. Aborting here would return a
-      // message whose next delivery would be refused for the same reason.
       return Optional.of(reject(requestId, request, rejection.getMessage()));
     }
   }

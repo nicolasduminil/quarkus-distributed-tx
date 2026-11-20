@@ -4,21 +4,30 @@ import jakarta.enterprise.context.*;
 
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
 
 @ApplicationScoped
 public class FailureInjection
 {
-  private final Map<String, AtomicInteger> remaining = new ConcurrentHashMap<>();
+  private final Set<String> failures = ConcurrentHashMap.newKeySet();
+  private final Set<String> halts = ConcurrentHashMap.newKeySet();
 
   public void armOnce(String requestId)
   {
-    remaining.put(requestId, new AtomicInteger(1));
+    failures.add(requestId);
   }
 
   public boolean consume(String requestId)
   {
-    AtomicInteger counter = remaining.get(requestId);
-    return counter != null && counter.compareAndSet(1, 0);
+    return failures.remove(requestId);
+  }
+
+  public void armHaltOnce(String requestId)
+  {
+    halts.add(requestId);
+  }
+
+  public boolean consumeHalt(String requestId)
+  {
+    return halts.remove(requestId);
   }
 }
