@@ -13,6 +13,7 @@ tasks
 CLAUDE.md
 .claude/
 claude-resume.txt
+transfer-kafka/SCENARIO.md
 
 # Published in a separate repository
 article.md
